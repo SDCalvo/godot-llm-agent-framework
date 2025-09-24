@@ -187,8 +187,38 @@ func _normalize_response(parsed: Dictionary, code: int) -> Dictionary:
                         assistant_text += String(piece.get("text", ""))
 
     var tool_calls := []
+    # Top-level tool_calls (if API provides it)
     if parsed.has("tool_calls"):
         tool_calls = parsed["tool_calls"]
+    # Otherwise, scan output content for tool_call chunks
+    if tool_calls.size() == 0 and parsed.has("output") and typeof(parsed.get("output")) == TYPE_ARRAY:
+        var outputs2: Array = parsed.get("output")
+        for item2 in outputs2:
+            if typeof(item2) != TYPE_DICTIONARY:
+                continue
+            if not item2.has("content") or typeof(item2["content"]) != TYPE_ARRAY:
+                continue
+            for piece2 in item2["content"]:
+                if typeof(piece2) != TYPE_DICTIONARY:
+                    continue
+                if piece2.get("type", "") == "tool_call":
+                    var call: Dictionary = {
+                        "tool_call_id": piece2.get("id", piece2.get("tool_call_id", "")),
+                        "name": piece2.get("name", ""),
+                        "arguments": {}
+                    }
+                    var args_raw: Variant = piece2.get("arguments", piece2.get("input", {}))
+                    if typeof(args_raw) == TYPE_STRING:
+                        var parsed_args = JSON.parse_string(String(args_raw))
+                        if typeof(parsed_args) == TYPE_DICTIONARY:
+                            call["arguments"] = parsed_args
+                        else:
+                            call["arguments"] = {"_raw": args_raw}
+                    elif typeof(args_raw) == TYPE_DICTIONARY:
+                        call["arguments"] = args_raw
+                    else:
+                        call["arguments"] = {"_raw": args_raw}
+                    tool_calls.push_back(call)
 
     var status := "tool_calls" if tool_calls.size() > 0 else "assistant"
     return {
