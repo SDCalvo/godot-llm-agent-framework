@@ -1,0 +1,30 @@
+[gd_scene load_steps=2 format=3 uid="uid://br4bnyjsprbin"]
+
+[ext_resource type="Script" uid="uid://ke4cs1h8c1s7" path="res://scenes/control.gd" id="1_wen4y"]
+
+[node name="Test" type="Node2D"]
+
+[node name="Control" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_wen4y")
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Control"]
+layout_mode = 0
+offset_left = 294.0
+offset_top = 52.0
+offset_right = 594.0
+offset_bottom = 352.0
+
+[node name="CallButton" type="Button" parent="Control/VBoxContainer"]
+layout_mode = 2
+text = "Call"
+
+[node name="Output" type="RichTextLabel" parent="Control/VBoxContainer"]
+layout_mode = 2
+text = "Output here"
+fit_content = true

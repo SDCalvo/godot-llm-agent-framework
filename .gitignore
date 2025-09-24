@@ -17,3 +17,6 @@ export_credentials.cfg
 .mono/
 data_*/
 mono_crash.*.json
+
+# Local environment (do not commit secrets)
+.env
