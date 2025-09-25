@@ -1,10 +1,16 @@
 extends Node
 
+## LLMManager
+##
+## Autoloaded coordinator that configures the `OpenAIWrapper` and serves as a
+## factory for agents. Reads API key and optional defaults from environment or
+## `.env`, instantiates the wrapper, and exposes convenience creation APIs.
+
 # LLMManager: central coordinator for model interactions and agent control.
 # Autoloaded singleton (registered by the EditorPlugin).
 
 const OpenAIWrapper = preload("res://addons/godot_llm/runtime/openai_wrapper/OpenAIWrapper.gd")
-const LLMAgent = preload("res://addons/godot_llm/runtime/agent/LLMAgent.gd")
+const LLMAgent = preload("res://addons/godot_llm/runtime/llm_agent/LLMAgent.gd")
 
 func _ready() -> void:
     _init_from_env_or_dotenv()

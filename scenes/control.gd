@@ -73,6 +73,17 @@ func _on_call_openai() -> void:
 	print("TEST got result status=", String(result.get("status", "")), " code=", int(result.get("http_code", -1)))
 	print("TEST raw result: ", JSON.stringify(result.get("raw", {}), "  "))
 
+	# Update UI with assistant text or show tool/error info
+	match String(result.get("status", "")):
+		"assistant":
+			out.text = String(result.get("assistant_text", ""))
+		"tool_calls":
+			out.text = "Tool calls:\n" + JSON.stringify(result.get("tool_calls", []), "  ")
+		"error":
+			out.text = "Error:\n" + JSON.stringify(result.get("error", {}), "  ")
+		_:
+			out.text = "Unexpected result:\n" + JSON.stringify(result, "  ")
+
 func _on_stream_call() -> void:
 	if stream_out == null:
 		return

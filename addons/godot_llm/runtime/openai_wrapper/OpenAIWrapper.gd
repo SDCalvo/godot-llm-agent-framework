@@ -1,13 +1,49 @@
 extends Node
 
+## OpenAIWrapper
+##
+## Transport-only client for OpenAI's Responses API in Godot 4.
+## - Non‑streaming: uses `HTTPRequest` per call to avoid BUSY state.
+## - Streaming: uses `HTTPClient` and parses Server-Sent Events (SSE).
+##
+## Do not use this class directly in most games; prefer `LLMManager` and
+## `LLMAgent`, which configure and drive this wrapper. This wrapper:
+## - Normalizes response payloads (assistant text, tool calls, usage).
+## - Implements capped retries on 429/5xx with respect for Retry-After.
+## - Emits streaming signals for deltas and lifecycle.
+
 # OpenAIWrapper: non-autoload helper to perform OpenAI API requests via the Responses API.
 # This implementation focuses on non-streaming requests using HTTPRequest and includes
 # a normalized return shape plus basic retry/backoff for 429/5xx responses.
 
+## Emitted when a streaming session starts.
+##
+## [param stream_id] Internal client id for this stream.
+## [param response_id] OpenAI response id.
 signal stream_started(stream_id: String, response_id: String)
+## Emitted for each text delta during streaming.
+##
+## [param stream_id] Internal client id.
+## [param text_delta] Incremental assistant text.
 signal stream_delta_text(stream_id: String, text_delta: String)
+## Emitted when the model streams tool-call arguments.
+##
+## [param stream_id] Internal client id.
+## [param tool_call_id] Tool call identifier.
+## [param name] Tool name.
+## [param arguments_delta] Partial JSON arguments.
 signal stream_tool_call(stream_id: String, tool_call_id: String, name: String, arguments_delta: String)
+## Emitted at the end of streaming.
+##
+## [param stream_id] Internal client id.
+## [param ok] True if completed cleanly.
+## [param final_text] Concatenated assistant text.
+## [param usage] Token usage if provided.
 signal stream_finished(stream_id: String, ok: bool, final_text: String, usage: Dictionary)
+## Emitted on streaming error.
+##
+## [param stream_id] Internal client id.
+## [param error] Error details.
 signal stream_error(stream_id: String, error: Dictionary)
 
 var _api_key: String = ""
@@ -22,15 +58,21 @@ func _ready() -> void:
 	# No persistent HTTPRequest; create per-call to avoid BUSY state
 	pass
 
+## Set the API key used for all requests.
+##
+## [param key] Secret key string (never logged).
 func set_api_key(key: String) -> void:
 	_api_key = key
 
+## Set the API base URL (advanced use: proxies, self-hosted gateways).
 func set_base_url(url: String) -> void:
 	_base_url = url.rstrip("/")
 
+## Set the default model to use when not provided per call.
 func set_default_model(model: String) -> void:
 	_default_model = model
 
+## Set default request parameters (e.g., temperature, top_p).
 func set_default_params(params: Dictionary) -> void:
 	_default_params = params.duplicate(true)
 
@@ -60,6 +102,12 @@ func make_audio_input(role: String, wav_data: PackedByteArray, format: String = 
 	}
 
 # Core Responses API: create a response
+## Create a non‑streaming response.
+##
+## [param messages] Array of OpenAI-ready message dicts.
+## [param tools] Array of tool schema dicts (optional).
+## [param options] Per-call overrides (model, temperature, etc.).
+## [return] Normalized result dictionary (assistant/tool_calls/error).
 func create_response(messages: Array, tools: Array = [], options: Dictionary = {}) -> Dictionary:
 	var model := options.get("model", _default_model)
 	var body: Dictionary = {
@@ -83,6 +131,11 @@ func create_response(messages: Array, tools: Array = [], options: Dictionary = {
 	return _error_result(res)
 
 # Continue a response by submitting tool outputs
+## Continue a response by submitting tool outputs.
+##
+## [param response_id] OpenAI response id to continue.
+## [param tool_outputs] Array of {tool_call_id, output:String(JSON)} entries.
+## [return] Normalized result.
 func submit_tool_outputs(response_id: String, tool_outputs: Array) -> Dictionary:
 	var body: Dictionary = {
 		"tool_outputs": tool_outputs
@@ -96,6 +149,12 @@ func submit_tool_outputs(response_id: String, tool_outputs: Array) -> Dictionary
 	return _error_result(res)
 
 # --- Streaming stubs (to implement later) ---
+## Start a streaming response (SSE).
+##
+## [param messages] OpenAI-ready messages.
+## [param tools] Tool schemas (optional).
+## [param options] Per-call overrides; model is read like non‑streaming.
+## [return] Internal stream id to correlate with emitted signals.
 func stream_response_start(messages: Array, tools: Array = [], options: Dictionary = {}) -> String:
 	var stream_id := str(Time.get_unix_time_from_system()) + "-" + str(randi())
 	var model := options.get("model", _default_model)
@@ -123,6 +182,8 @@ func stream_response_start(messages: Array, tools: Array = [], options: Dictiona
 	_sse_loop(stream_id, "/responses", body)
 	return stream_id
 
+## For streamed sessions, submit tool outputs when tool calls occur.
+## Best-effort; may fall back to a non-streaming continuation.
 func stream_submit_tool_outputs(stream_id: String, tool_outputs: Array) -> void:
 	# For now, submit via non-streaming continuation when we have a response_id
 	if not _streams.has(stream_id):
@@ -132,6 +193,7 @@ func stream_submit_tool_outputs(stream_id: String, tool_outputs: Array) -> void:
 		return
 	await submit_tool_outputs(response_id, tool_outputs)
 
+## Cancel a running streaming session.
 func stream_cancel(stream_id: String) -> void:
 	if not _streams.has(stream_id):
 		return
