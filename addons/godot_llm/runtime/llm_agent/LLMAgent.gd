@@ -1,13 +1,410 @@
 extends Node
+class_name LLMAgent
 
 ## LLMAgent
 ##
-## Non‑autoload agent abstraction. Creates and runs LLM invocations using the
-## configured `OpenAIWrapper`, handling tool‑calling loops for invoke/ainvoke.
-## Emits debug/delta/finished signals so games can wire in HUDs or logs.
-## Concrete logic will follow the design in `design.md`.
+## Non‑autoload agent abstraction. Runs LLM turns using the configured
+## `OpenAIWrapper`, handling tool‑calling loops for both `invoke` (discrete)
+## and `ainvoke` (streaming). Tool handlers execute in parallel threads.
+##
+## Key behaviors
+## - First turn: you call `invoke(messages)` or `ainvoke(messages)`.
+##   - The agent validates messages and enforces exactly one system message at
+##     index 0 (if present). If invalid (multiple system messages or system not
+##     at index 0), the agent returns an error.
+##   - If `hyper.system_prompt` or `system_prompt` is set and no system message
+##     is provided, the agent prepends one automatically.
+## - Continuations: within a single turn, only tool outputs are submitted via
+##   `submit_tool_outputs(response_id, ...)`. We do not resend messages.
+## - Interruption: call `interrupt()` to cancel the current run. Then
+##   `resume()`/`stream_resume()` to start a new turn with the internal
+##   `message_history`, or use `interrupt_with_invoke(messages)` /
+##   `interrupt_with_ainvoke(messages)` to cancel, append messages, and start a
+##   new turn immediately.
+##
+## Construction
+## - Via LLMManager (recommended): LLMManager.create_agent(hyper, tools)
+## - Direct: LLMAgent.create(tools, hyper)
+##   - `hyper` may include: { model, temperature, system_prompt }
+##
+## Examples
+## ```gdscript
+## var agent := LLMAgent.create([], {"model":"gpt-4o-mini", "system_prompt":"You are a merchant."})
+## var res := await agent.invoke(Message.user_simple("Greet the player."))
+## res = await agent.interrupt_with_invoke(Message.user_simple("Change topic: prices?"))
+## var run_id := agent.ainvoke(Message.user_simple("Stream a greeting."))
+## agent.delta.connect(func(id, d): if id==run_id: $Output.append_text(d))
+## ```
+
+signal debug(run_id: String, event: Dictionary)
+signal delta(run_id: String, text_delta: String)
+signal finished(run_id: String, ok: bool, result: Dictionary)
+signal error(run_id: String, err: Dictionary)
+
+const OpenAIWrapperClass = preload("res://addons/godot_llm/runtime/openai_wrapper/OpenAIWrapper.gd")
+
+var wrapper: OpenAIWrapperClass
+var tools: Array = []               # Array[LLMTool]
+var tools_by_name: Dictionary = {}  # name -> LLMTool
+var hyper: Dictionary = {}
+var message_history: Array = []     # Conversation history we maintain between turns
+var _interrupted: bool = false
+var _current_stream_id: String = ""
+var system_prompt: String = ""
 
 func _ready() -> void:
     pass
+
+## Factory. Prefer using LLMManager.create_agent in most cases.
+static func create(tools_in: Array, hyper_in: Dictionary = {}) -> LLMAgent:
+    var agent: LLMAgent = LLMAgent.new()
+    agent._init_agent(tools_in, hyper_in)
+    return agent
+
+func _init_agent(tools_in: Array, hyper_in: Dictionary) -> void:
+    tools = tools_in if tools_in != null else []
+    hyper = hyper_in if hyper_in != null else {}
+    tools_by_name.clear()
+    for t in tools:
+        if t != null and t.name != "":
+            tools_by_name[t.name] = t
+
+    # Resolve wrapper from autoloaded LLMManager. Users never pass it in.
+    var manager := get_tree().get_root().get_node_or_null("/root/LLMManager")
+    if manager != null:
+        for child in manager.get_children():
+            if child is OpenAIWrapperClass:
+                wrapper = child
+                break
+
+    # Optional system prompt from hyper
+    if hyper.has("system_prompt"):
+        system_prompt = String(hyper["system_prompt"]) 
+
+## Conversation history helpers
+func set_history(messages: Array) -> void:
+    message_history = messages if messages != null else []
+
+func add_messages(messages: Array) -> void:
+    if messages == null:
+        return
+    for m in messages:
+        message_history.append(m)
+
+func set_system_prompt(text: String) -> void:
+    system_prompt = text
+
+## Get a deep copy of the current message history
+func get_history() -> Array:
+    return message_history.duplicate(true)
+
+## Clear the message history (does not change system_prompt)
+func clear_history() -> void:
+    message_history.clear()
+
+## Append a user message using the Message helper
+func append_user(texts: Array[String] = [], images: Array[String] = [], audios: Array[PackedByteArray] = [], opts: Dictionary = {}) -> void:
+    var msgs := Message.user(texts, images, audios, opts)
+    for m in msgs:
+        message_history.append(m)
+
+## Append an assistant message (text-only convenience)
+func append_assistant(texts: Array[String] = []) -> void:
+    var msgs := Message.assistant(texts, [], [])
+    for m in msgs:
+        message_history.append(m)
+
+## Remove and return the last message, or null if empty
+func pop_last() -> Variant:
+    if message_history.is_empty():
+        return null
+    return message_history.pop_back()
+
+## Replace history with validation: single system at index 0 only
+func replace_history(messages: Array) -> void:
+    if messages == null:
+        message_history.clear()
+        return
+    # Count/validate
+    var sys_count := 0
+    for m in messages:
+        if typeof(m) == TYPE_DICTIONARY and String(m.get("role", "")) == "system":
+            sys_count += 1
+    if sys_count > 1:
+        push_error("LLMAgent: replace_history failed: multiple system messages.")
+        return
+    if sys_count == 1 and not (messages.size() > 0 and String(messages[0].get("role", "")) == "system"):
+        push_error("LLMAgent: replace_history failed: system message must be first.")
+        return
+    message_history = messages
+    if sys_count == 1:
+        var sys0: Dictionary = messages[0]
+        var content: Array = sys0.get("content", [])
+        for part in content:
+            if typeof(part) == TYPE_DICTIONARY and part.get("type", "") == "input_text":
+                system_prompt = String(part.get("text", ""))
+                break
+
+## Interrupt the current run (streaming or non‑streaming). Caller may then
+## append new messages and start a fresh invoke/ainvoke.
+func interrupt() -> void:
+    _interrupted = true
+    if _current_stream_id != "":
+        wrapper.stream_cancel(_current_stream_id)
+        _disconnect_stream()
+
+func interrupt_with_new_messages(messages: Array) -> void:
+    interrupt()
+    add_messages(messages)
+
+## Run a non‑streaming call with tool loop until completion.
+## messages: Array of OpenAI-ready messages (use Message.user/system/... helpers).
+func invoke(messages: Array) -> Dictionary:
+    var run_id := str(Time.get_unix_time_from_system()) + "-" + str(randi())
+    var options := hyper.duplicate()
+    var step := 0
+    var schemas := _tool_schemas()
+    _interrupted = false
+
+    # Build and validate first-turn messages (enforce single system at index 0)
+    var prep := _prepare_first_turn(messages)
+    if not bool(prep.get("ok", false)):
+        var err := prep.get("error", {"type":"invalid_messages"})
+        emit_signal("error", run_id, err)
+        return {"ok": false, "error": err}
+    var turn_messages: Array = prep.get("messages", [])
+
+    while true:
+        emit_signal("debug", run_id, {"type":"request_started", "step": step, "tool_count": schemas.size()})
+        var res: Dictionary = await wrapper.create_response(turn_messages, schemas, options)
+        emit_signal("debug", run_id, {"type":"request_finished", "step": step, "status": res.get("status", ""), "http_code": res.get("http_code", -1), "usage": res.get("usage", {})})
+
+        if _interrupted:
+            return {"ok": false, "error": {"type": "interrupted"}}
+
+        var status := String(res.get("status", "error"))
+        if status == "error":
+            var err := res.get("error", res)
+            emit_signal("error", run_id, err)
+            return {"ok": false, "error": err}
+
+        if status == "assistant":
+            var out := {
+                "ok": true,
+                "text": String(res.get("assistant_text", "")),
+                "usage": res.get("usage", {}),
+                "steps": step + 1
+            }
+            emit_signal("finished", run_id, true, out)
+            return out # Exit the loop when assistant text is returned, that means no more tool calls are emitted by the model so this is the final result
+
+        # tool_calls branch
+        var tool_calls: Array = res.get("tool_calls", [])
+        emit_signal("debug", run_id, {"type":"tool_calls", "step": step, "calls": tool_calls})
+
+        # Execute tool handlers in parallel threads and collect outputs
+        var threads: Array = []
+        for call in tool_calls:
+            var th := Thread.new()
+            threads.append(th)
+            th.start(Callable(self, "_thread_execute_tool").bind(call))
+
+        var tool_outputs: Array = []
+        for th in threads:
+            var out = th.wait_to_finish()
+            tool_outputs.append(out)
+
+        var cont: Dictionary = await wrapper.submit_tool_outputs(String(res.get("response_id", "")), tool_outputs)
+        if _interrupted:
+            return {"ok": false, "error": {"type": "interrupted"}}
+        # Prepare for next loop; server maintains state for this response id
+        turn_messages = []
+        step += 1
+        # Replace res to let loop evaluate next status
+        res = cont
+        if String(res.get("status", "")) == "assistant":
+            var out2 := {
+                "ok": true,
+                "text": String(res.get("assistant_text", "")),
+                "usage": res.get("usage", {}),
+                "steps": step + 0
+            }
+            emit_signal("finished", run_id, true, out2)
+            return out2
+    return {"ok": false, "error": {"type": "internal", "message": "unreachable"}}
+
+## Start a streaming run. Returns a run_id immediately.
+func ainvoke(messages: Array) -> String:
+    var run_id := str(Time.get_unix_time_from_system()) + "-" + str(randi())
+    var options := hyper.duplicate()
+    var schemas := _tool_schemas()
+    _interrupted = false
+
+    # Build and validate first-turn messages (streaming)
+    var prep := _prepare_first_turn(messages)
+    if not bool(prep.get("ok", false)):
+        emit_signal("error", run_id, prep.get("error", {"type":"invalid_messages"}))
+        return ""
+    var start_messages: Array = prep.get("messages", [])
+
+    var stream_id := wrapper.stream_response_start(start_messages, schemas, options)
+    _current_stream_id = stream_id
+    var acc: Dictionary = {"args": {}}  # call_id -> accumulated args string
+
+    # Local handlers filtered by stream_id
+    var on_started = func(id: String, response_id: String):
+        if id != stream_id: return
+        emit_signal("debug", run_id, {"type":"request_started", "response_id": response_id})
+
+    var on_delta = func(id: String, d: String):
+        if id != stream_id: return
+        emit_signal("delta", run_id, d)
+
+    var on_tool = func(id: String, call_id: String, name: String, args_delta: String):
+        if id != stream_id: return
+        var cur := String(acc["args"].get(call_id, "")) + String(args_delta)
+        acc["args"][call_id] = cur
+        var parsed = JSON.parse_string(cur)
+        if typeof(parsed) == TYPE_DICTIONARY:
+            var output := _execute_tool_call({"tool_call_id": call_id, "name": name, "arguments": parsed})
+            wrapper.stream_submit_tool_outputs(stream_id, [output])
+            emit_signal("debug", run_id, {"type":"tool_result", "name": name})
+
+    var on_finished = func(id: String, ok: bool, final_text: String, usage: Dictionary):
+        if id != stream_id: return
+        emit_signal("finished", run_id, ok, {"ok": ok, "text": final_text, "usage": usage})
+        _disconnect_stream()
+
+    var on_error = func(id: String, err: Dictionary):
+        if id != stream_id: return
+        emit_signal("error", run_id, err)
+        _disconnect_stream()
+
+    # Connect
+    wrapper.stream_started.connect(on_started)
+    wrapper.stream_delta_text.connect(on_delta)
+    wrapper.stream_tool_call.connect(on_tool)
+    wrapper.stream_finished.connect(on_finished)
+    wrapper.stream_error.connect(on_error)
+
+    # Store disconnectors so we can clean up
+    _stream_connections = [on_started, on_delta, on_tool, on_finished, on_error]
+
+    return run_id
+
+var _stream_connections: Array = []
+
+func _disconnect_stream() -> void:
+    # Godot 4 allows disconnect with Callable
+    for c in _stream_connections:
+        if wrapper.stream_started.is_connected(c):
+            wrapper.stream_started.disconnect(c)
+        if wrapper.stream_delta_text.is_connected(c):
+            wrapper.stream_delta_text.disconnect(c)
+        if wrapper.stream_tool_call.is_connected(c):
+            wrapper.stream_tool_call.disconnect(c)
+        if wrapper.stream_finished.is_connected(c):
+            wrapper.stream_finished.disconnect(c)
+        if wrapper.stream_error.is_connected(c):
+            wrapper.stream_error.disconnect(c)
+    _stream_connections.clear()
+    _current_stream_id = ""
+
+## Convenience: resume with current history (non‑streaming)
+func resume() -> Dictionary:
+    return await invoke([])
+
+## Convenience: resume streaming with current history
+func stream_resume() -> String:
+    return ainvoke([])
+
+## Convenience: interrupt, append messages, invoke immediately (non‑streaming)
+func interrupt_with_invoke(messages: Array) -> Dictionary:
+    interrupt()
+    add_messages(messages)
+    return await invoke([])
+
+## Convenience: interrupt, append messages, stream immediately
+func interrupt_with_ainvoke(messages: Array) -> String:
+    interrupt()
+    add_messages(messages)
+    return ainvoke([])
+
+func _tool_schemas() -> Array:
+    var schemas: Array = []
+    for t in tools:
+        if t != null:
+            schemas.append(t.to_openai_schema())
+    return schemas
+
+func _execute_tool_call(call: Dictionary) -> Dictionary:
+    var call_id := String(call.get("tool_call_id", call.get("id", "")))
+    var name := String(call.get("name", ""))
+    var args := call.get("arguments", {})
+    var tool = tools_by_name.get(name, null)
+    if tool == null:
+        return {"tool_call_id": call_id, "output": JSON.stringify({"ok": false, "error": {"type": "unknown_tool", "name": name}})}
+    var result: Dictionary = tool.execute(args)
+    return {"tool_call_id": call_id, "output": JSON.stringify(result)}
+
+func _thread_execute_tool(call: Dictionary) -> Dictionary:
+    # Called on a worker thread; delegate to the same execution helper
+    return _execute_tool_call(call)
+
+
+## Internal: build first-turn messages from provided messages or history and
+## enforce single system prompt at index 0. If messages includes a system
+## message, it must be the first and will override agent.system_prompt.
+## Returns { ok, messages? | error }.
+func _prepare_first_turn(messages: Array) -> Dictionary:
+    var base: Array = []
+    if messages != null and messages.size() > 0:
+        base = messages
+        message_history = messages
+    else:
+        base = message_history
+
+    # Count system messages and position
+    var system_count := 0
+    var first_role := ""
+    if base.size() > 0:
+        var first: Variant = base[0]
+        if typeof(first) == TYPE_DICTIONARY:
+            first_role = String((first as Dictionary).get("role", ""))
+
+    for m in base:
+        if typeof(m) == TYPE_DICTIONARY and String(m.get("role", "")) == "system":
+            system_count += 1
+
+    if system_count > 1:
+        return {"ok": false, "error": {"type": "invalid_messages", "message": "Multiple system messages found. Only one allowed at index 0."}}
+
+    if system_count == 1 and first_role != "system":
+        return {"ok": false, "error": {"type": "invalid_messages", "message": "System message must be first in history."}}
+
+    var final_msgs: Array = []
+    if system_count == 1:
+        # Override agent.system_prompt based on the first message content
+        var sys0: Dictionary = base[0]
+        var content: Array = sys0.get("content", [])
+        # Extract text from the first input_text piece
+        for part in content:
+            if typeof(part) == TYPE_DICTIONARY and part.get("type", "") == "input_text":
+                system_prompt = String(part.get("text", ""))
+                break
+    if system_prompt != "":
+        final_msgs += Message.system_simple(system_prompt)
+
+    # Append the rest, skipping any system messages (we already emitted one)
+    var start_idx := 0
+    if system_count == 1:
+        start_idx = 1
+    for i in range(start_idx, base.size()):
+        var m = base[i]
+        if typeof(m) == TYPE_DICTIONARY and String(m.get("role", "")) == "system":
+            continue
+        final_msgs.append(m)
+
+    return {"ok": true, "messages": final_msgs}
 
 
