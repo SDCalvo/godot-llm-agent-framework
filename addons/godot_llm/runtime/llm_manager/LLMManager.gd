@@ -10,7 +10,8 @@ extends Node
 # Autoloaded singleton (registered by the EditorPlugin).
 
 const OpenAIWrapper = preload("res://addons/godot_llm/runtime/openai_wrapper/OpenAIWrapper.gd")
-const LLMAgent = preload("res://addons/godot_llm/runtime/llm_agent/LLMAgent.gd")
+
+var _wrapper: OpenAIWrapper
 
 func _ready() -> void:
     _init_from_env_or_dotenv()
@@ -22,15 +23,15 @@ func _init_from_env_or_dotenv() -> void:
         if env_key != "":
             key = env_key
     if key != "":
-        var wrapper : OpenAIWrapper = OpenAIWrapper.new()
-        add_child(wrapper)
-        wrapper.set_api_key(key)
+        _wrapper = OpenAIWrapper.new()
+        add_child(_wrapper)
+        _wrapper.set_api_key(key)
         # Optionally set model from .env as well
         var model : String = OS.get_environment("OPENAI_MODEL")
         if model == "":
             model = _load_env_key("OPENAI_MODEL")
         if model != "":
-            wrapper.set_default_model(model)
+            _wrapper.set_default_model(model)
 
 func _load_env_key(name: String) -> String:
     var env_path : String = ProjectSettings.globalize_path("res://.env")
@@ -52,5 +53,22 @@ func _load_env_key(name: String) -> String:
             break
     f.close()
     return result
+
+## Get the configured OpenAIWrapper instance (may be null if no key configured).
+func get_wrapper() -> OpenAIWrapper:
+    return _wrapper
+
+## Set default request parameters for all calls.
+func set_default_params(params: Dictionary) -> void:
+    if _wrapper != null:
+        _wrapper.set_default_params(params)
+
+## Factory to create an agent with provided tools/hyper, using the shared wrapper.
+func create_agent(hyper: Dictionary, tools: Array):
+    var AgentClass = load("res://addons/godot_llm/runtime/llm_agent/LLMAgent.gd")
+    var agent = AgentClass.create(tools, hyper)
+    if _wrapper != null and agent != null and agent.has_method("set_wrapper"):
+        agent.set_wrapper(_wrapper)
+    return agent
 
 

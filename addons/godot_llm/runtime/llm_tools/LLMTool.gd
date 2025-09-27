@@ -51,13 +51,12 @@ static func create_tool(name: String, description: String, schema: Dictionary, h
 ##
 ## [return] Dictionary with the expected tool format for `tools`.
 func to_openai_schema() -> Dictionary:
+    # OpenAI Responses API expects top-level name/description/parameters for tools
     return {
         "type": "function",
-        "function": {
-            "name": name,
-            "description": description,
-            "parameters": schema,
-        }
+        "name": name,
+        "description": description,
+        "parameters": schema,
     }
 
 ## Execute the tool's handler with validated arguments.

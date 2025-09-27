@@ -31,10 +31,10 @@ fit_content = true
 
 [node name="VBoxContainer2" type="VBoxContainer" parent="Control"]
 layout_mode = 0
-offset_left = 97.0
-offset_top = 51.0
-offset_right = 397.0
-offset_bottom = 351.0
+offset_left = 107.0
+offset_top = 46.0
+offset_right = 407.0
+offset_bottom = 346.0
 
 [node name="StreamCallButton" type="Button" parent="Control/VBoxContainer2"]
 layout_mode = 2
@@ -43,5 +43,54 @@ text = "Stream Call"
 [node name="StreamOutput" type="RichTextLabel" parent="Control/VBoxContainer2"]
 layout_mode = 2
 text = "Srtream Output Here
-"
+:"
 fit_content = true
+
+[node name="VBoxContainer3" type="VBoxContainer" parent="Control"]
+layout_mode = 0
+offset_left = 97.0
+offset_top = 380.0
+offset_right = 397.0
+offset_bottom = 680.0
+
+[node name="AgentInvokeButton" type="Button" parent="Control/VBoxContainer3"]
+layout_mode = 2
+text = "Agent Invoke"
+
+[node name="AgentOutput" type="RichTextLabel" parent="Control/VBoxContainer3"]
+layout_mode = 2
+text = "Agent output here"
+fit_content = true
+
+[node name="AgentStreamButton" type="Button" parent="Control/VBoxContainer3"]
+layout_mode = 2
+text = "Agent Stream"
+
+[node name="AgentStreamOutput" type="RichTextLabel" parent="Control/VBoxContainer3"]
+layout_mode = 2
+text = "Agent stream output here"
+fit_content = true
+
+[node name="DebugPanel" type="Panel" parent="Control"]
+layout_mode = 0
+offset_left = 781.0
+offset_top = 284.0
+offset_right = 1081.0
+offset_bottom = 584.0
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Control/DebugPanel"]
+layout_mode = 0
+offset_left = 8.0
+offset_top = 8.0
+offset_right = 292.0
+offset_bottom = 292.0
+
+[node name="DebugTextEdit" type="TextEdit" parent="Control/DebugPanel/VBoxContainer"]
+visible = false
+custom_minimum_size = Vector2(0, 200)
+layout_mode = 2
+editable = false
+
+[node name="CopyButton" type="Button" parent="Control/DebugPanel/VBoxContainer"]
+layout_mode = 2
+text = "Copy Debug to Clipboard"

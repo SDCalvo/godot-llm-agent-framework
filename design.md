@@ -9,8 +9,8 @@ Runtime components
 
 - Autoload singletons
   - LLMManager: shared config, factory for agents, central debug bus.
-  - ToolRegistry: convenience holder for Tool instances (no enable/disable logic).
-  - BoardManager: shared blackboard; world-agnostic messaging surface (optional for agents).
+  - LLMToolRegistry: convenience holder for Tool instances (no enable/disable logic).
+  - LLMBoardManager: shared blackboard; world-agnostic messaging surface (optional for agents).
 - Non‑autoload
   - OpenAIWrapper: transport only (Responses API). Non‑streaming + SSE streaming.
   - LLMAgent: single agent class with tool-calling loop (invoke/ainvoke).
@@ -72,7 +72,7 @@ Tool
 - Fields
   - name, description, schema, handler
 
-ToolRegistry (autoload)
+LLMToolRegistry (autoload)
 
 - Purpose: simple container for Tool instances.
 - API
@@ -95,27 +95,41 @@ LLMMessage (multimodal builder)
   - Message.user(...), Message.system(...): shorthands returning Array[Message]
   - to_openai(messages: Array[Message]) → Array[Dictionary] # passthrough
 
-LLMAgent (user-facing, minimal surface)
+LLMAgent (user-facing)
 
 - Factory
   - LLMManager.create_agent(hyper: Dictionary, tools: Array[Tool]) → LLMAgent
-    - LLMManager owns/configures the OpenAIWrapper; agents get it internally.
-    - Advanced/testing: LLMAgent.create(tools: Array[Tool], hyper: Dictionary, wrapper_override: OpenAIWrapper = null)
-  - hyper keys (subset): model, temperature, max_output_tokens, max_steps=8, parallel_tool_calls=true, streaming=false, timeouts
+    - Manager owns/configures OpenAIWrapper; agents resolve it internally.
+  - LLMAgent.create(tools: Array[Tool], hyper: Dictionary) → LLMAgent
+    - hyper keys (subset): model, temperature, system_prompt
+- Message history CRUD
+  - get_history() → Array; clear_history() → void
+  - append_user(texts=[], images=[], audios=[], opts={}) → void
+  - append_assistant(texts=[]) → void
+  - pop_last() → Variant
+  - replace_history(messages: Array) → void (validates single system at index 0)
+  - set_system_prompt(text: String) → void (single system prompt; enforced)
 - Calls
-  - invoke(messages: Array[Message]) → { ok, text?, usage?, steps, tool_trace?: Array, error? }
-  - ainvoke(messages: Array[Message]) → run_id: String # returns immediately; see signals
+  - invoke(messages: Array[Message]) → { ok, text?, usage?, error? }
+  - ainvoke(messages: Array[Message]) → run_id: String (streaming; see signals)
+  - interrupt() → void
+  - resume() → Dictionary (equivalent to invoke([]))
+  - stream_resume() → String (equivalent to ainvoke([]))
+  - interrupt_with_new_messages(messages) → void (append only)
+  - interrupt_with_invoke(messages) → Dictionary (cancel, append, invoke)
+  - interrupt_with_ainvoke(messages) → String (cancel, append, ainvoke)
 - Signals
-  - debug(run_id: String, event: Dictionary) # request_started/tool_calls/tool_result/request_finished/stop
+  - debug(run_id: String, event: Dictionary) # request_started/tool_calls/tool_result/request_finished
   - delta(run_id: String, text_delta: String)
   - finished(run_id: String, ok: bool, result: Dictionary)
   - error(run_id: String, err: Dictionary)
 - Loop policy
-  1. Call OpenAI with messages + tools.
-  2. If tool_calls present: dispatch handlers (parallel if allowed), collect tool_outputs, continue via submit_tool_outputs.
-  3. If no tool_calls: stop with assistant text.
-  - Stops on: no_more_tools, max_steps, cancelled, http_error/rate_limited/tool_error.
-  - Tracing: accumulate a compact tool_trace per step for debugging/insights.
+  - First turn: create_response(messages, tools)
+  - While status == "tool_calls": execute tools in parallel → submit_tool_outputs(response_id, outputs)
+  - When status == "assistant": stop and return
+  - Continuations: do not resend full messages; server maintains state via response_id
+  - Interruption: cancel current run/stream, optionally append new messages, start a new turn
+  - System prompt rules: exactly one system message at index 0; if provided out of place or multiple → error; if absent and system_prompt is set → prepend automatically
 
 LLMManager (autoload)
 
@@ -125,7 +139,7 @@ LLMManager (autoload)
   - create_agent(hyper: Dictionary, tools: Array[Tool]) → LLMAgent
 - Signals (broadcasted mirrors of agent events): agent_started/agent_delta/agent_finished/agent_error
 
-BoardManager (autoload)
+LLMBoardManager (autoload)
 
 - Purpose: shared blackboard for agents (optional in the loop).
 - Minimal API (subject to future expansion)
