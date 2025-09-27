@@ -5,12 +5,15 @@ extends Node
 ## Transport-only client for OpenAI's Responses API in Godot 4.
 ## - Non‑streaming: uses `HTTPRequest` per call to avoid BUSY state.
 ## - Streaming: uses `HTTPClient` and parses Server-Sent Events (SSE).
+## - Function call buffering: optimized for real-time argument streaming.
+## - Continuation handling: robust race condition prevention for tool calls.
 ##
 ## Do not use this class directly in most games; prefer `LLMManager` and
 ## `LLMAgent`, which configure and drive this wrapper. This wrapper:
 ## - Normalizes response payloads (assistant text, tool calls, usage).
 ## - Implements capped retries on 429/5xx with respect for Retry-After.
-## - Emits streaming signals for deltas and lifecycle.
+## - Emits streaming signals for deltas and lifecycle events.
+## - Handles streaming continuations with proper state management.
 
 # OpenAIWrapper: non-autoload helper to perform OpenAI API requests via the Responses API.
 # This implementation focuses on non-streaming requests using HTTPRequest and includes
@@ -40,6 +43,16 @@ signal stream_tool_call(stream_id: String, tool_call_id: String, name: String, a
 ## [param name] Tool name.
 ## [param arguments_json] Complete JSON arguments string.
 signal stream_tool_call_done(stream_id: String, tool_call_id: String, name: String, arguments_json: String)
+## Emitted when a tool call is announced (response.output_item.added).
+##
+## [param stream_id] The stream identifier.
+## [param tool_call_id] The tool call identifier.
+## [param name] The function name.
+signal stream_tool_call_announced(stream_id: String, tool_call_id: String, name: String)
+## Emitted when the response phase is completed (response.completed).
+##
+## [param stream_id] The stream identifier.
+signal stream_response_completed(stream_id: String)
 ## Emitted at the end of streaming.
 ##
 ## [param stream_id] Internal client id.
@@ -249,6 +262,7 @@ func stream_submit_tool_outputs(stream_id: String, tool_outputs: Array) -> void:
 	# Continue the stream on the same UI stream_id by starting a new SSE loop
 	print("WRAPPER stream_submit_tool_outputs — continuing stream, previous_response_id=", response_id, " items=", items.size())
 	print("WRAPPER continuation body: ", JSON.stringify(body, "  "))
+	print("WRAPPER before continuation: stream exists=", _streams.has(stream_id), " continuation_pending=", _streams.get(stream_id, {}).get("continuation_pending", false))
 	# continuation_pending flag should already be set by the agent
 	_sse_loop(stream_id, "/responses", body)
 
@@ -284,11 +298,10 @@ func _sse_loop_async(stream_id: String, path: String, payload: Dictionary) -> vo
 		print("WRAPPER _sse_loop_async: stream already cancelled: ", stream_id)
 		return
 	
-	# Close any existing client for this stream to avoid conflicts
+	# Keep reference to old client - we'll close it after new connection is established
 	var old_client: HTTPClient = _streams[stream_id].get("client", null)
 	if old_client != null:
-		old_client.close()
-		print("WRAPPER closed old client for stream continuation")
+		print("WRAPPER keeping old client alive during continuation setup")
 	
 	var info := _parse_base_url(_base_url)
 	var host: String = info["host"]
@@ -306,6 +319,9 @@ func _sse_loop_async(stream_id: String, path: String, payload: Dictionary) -> vo
 	var err := client.connect_to_host(host, port, tls_opts)
 	if err != OK:
 		print("WRAPPER continuation: connect failed err=", err)
+		if old_client != null:
+			old_client.close()
+			print("WRAPPER closed old client after connect error")
 		emit_signal("stream_error", stream_id, {"type": "connect_error", "message": str(err)})
 		_streams.erase(stream_id)
 		return
@@ -325,9 +341,17 @@ func _sse_loop_async(stream_id: String, path: String, payload: Dictionary) -> vo
 	print("WRAPPER continuation: connect completed with status=", client.get_status())
 	if client.get_status() != HTTPClient.STATUS_CONNECTED:
 		print("WRAPPER continuation: connect failed status=", client.get_status())
+		if old_client != null:
+			old_client.close()
+			print("WRAPPER closed old client after connection failed")
 		emit_signal("stream_error", stream_id, {"type": "connect_failed", "status": client.get_status()})
 		_streams.erase(stream_id)
 		return
+	
+	# Now that new connection is established, close the old client
+	if old_client != null:
+		old_client.close()
+		print("WRAPPER closed old client after new connection established")
 
 	var full_path := base_path + path
 	var body := JSON.stringify(payload)
@@ -417,9 +441,12 @@ func _sse_loop_async(stream_id: String, path: String, payload: Dictionary) -> vo
 		print("WRAPPER natural completion final_text_len=", final_text.length(), " continuation_pending=", has_continuation)
 		if not has_continuation:
 			# Clear continuation pending flag since we're finishing
+			print("WRAPPER ERASING STREAM: natural completion without continuation, stream_id=", stream_id)
 			_streams[stream_id]["continuation_pending"] = false
 			emit_signal("stream_finished", stream_id, true, final_text, {})
 			_streams.erase(stream_id)
+		else:
+			print("WRAPPER KEEPING STREAM: continuation pending, stream_id=", stream_id)
 	return
 
 func _process_sse_chunk(stream_id: String, text: String) -> void:
@@ -521,17 +548,24 @@ func _handle_sse_event(stream_id: String, block: String) -> void:
 		var final_text2 := String(_streams[stream_id].get("final_text", ""))
 		var has_continuation := bool(_streams[stream_id].get("continuation_pending", false))
 		print("WRAPPER response.completed final_text_len=", final_text2.length(), " continuation_pending=", has_continuation)
+		emit_signal("stream_response_completed", stream_id)
 		if not has_continuation:
+			print("WRAPPER ERASING STREAM: response.completed without continuation, stream_id=", stream_id)
 			emit_signal("stream_finished", stream_id, true, final_text2, obj.get("usage", {}))
 			_streams.erase(stream_id)
+		else:
+			print("WRAPPER KEEPING STREAM: response.completed with continuation pending, stream_id=", stream_id)
 		return
 	if event_type == "response.done":
 		var final_text3 := String(_streams[stream_id].get("final_text", ""))
 		var has_continuation2 := bool(_streams[stream_id].get("continuation_pending", false))
 		print("WRAPPER response.done final_text_len=", final_text3.length(), " continuation_pending=", has_continuation2)
 		if not has_continuation2:
+			print("WRAPPER ERASING STREAM: response.done without continuation, stream_id=", stream_id)
 			emit_signal("stream_finished", stream_id, true, final_text3, obj.get("usage", {}))
 			_streams.erase(stream_id)
+		else:
+			print("WRAPPER KEEPING STREAM: response.done with continuation pending, stream_id=", stream_id)
 		return
 	if event_type == "response.error":
 		emit_signal("stream_error", stream_id, obj.get("error", obj))
@@ -546,6 +580,8 @@ func _handle_sse_event(stream_id: String, block: String) -> void:
 			var item_id := String(item.get("id", ""))
 			var name := String(item.get("name", ""))
 			var call_id := String(item.get("call_id", ""))
+			print("WRAPPER tool announced call_id=", call_id, " name=", name)
+			emit_signal("stream_tool_call_announced", stream_id, call_id, name)
 			var calls: Dictionary = _streams[stream_id].get("fncalls", {})
 			calls[item_id] = {"name": name, "buf": "", "call_id": call_id}
 			_streams[stream_id]["fncalls"] = calls

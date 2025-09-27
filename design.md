@@ -1,20 +1,29 @@
-godot_llm – Design Overview (v0)
+godot_llm – Design Overview (v1.0)
 
-Goals
+## Goals ✅ ACHIEVED
 
 - Ship only the LLM plumbing for Godot 4: simple to use, extensible, game-agnostic.
 - Minimal, ergonomic APIs for messages, tools, and agents; great defaults; clear signals for debugging.
+- **NEW**: Robust streaming with parallel tool execution and race condition prevention.
 
-Runtime components
+## Recent Improvements (v1.0)
 
-- Autoload singletons
+- **Streaming Race Conditions**: Fixed complex timing issues in stream continuations with `continuation_pending` flags
+- **Function Call Buffering**: Simplified from 100+ lines to ~45 lines while maintaining functionality
+- **Parallel Tool Execution**: Optimized multi-threading for simultaneous tool calls in games
+- **Code Cleanup**: Removed redundant functions and over-engineered fallback logic
+- **Documentation**: Complete API documentation with threading considerations and usage examples
+
+## Runtime Components
+
+- **Autoload singletons**
   - LLMManager: shared config, factory for agents, central debug bus.
   - LLMToolRegistry: convenience holder for Tool instances (no enable/disable logic).
-  - LLMBoardManager: shared blackboard; world-agnostic messaging surface (optional for agents).
-- Non‑autoload
-  - OpenAIWrapper: transport only (Responses API). Non‑streaming + SSE streaming.
-  - LLMAgent: single agent class with tool-calling loop (invoke/ainvoke).
-  - Tool: user-defined function calls with JSON Schema.
+  - LLMBoardManager: shared blackboard; world-agnostic messaging surface (placeholder).
+- **Non‑autoload**
+  - OpenAIWrapper: transport only (Responses API). Non‑streaming + optimized SSE streaming.
+  - LLMAgent: single agent class with tool-calling loop (invoke/ainvoke) + parallel tool execution.
+  - LLMTool: user-defined function calls with JSON Schema.
   - LLMMessage: compact multimodal message builder.
 
 Security / keys

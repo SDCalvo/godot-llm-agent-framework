@@ -15,6 +15,12 @@ run/main_scene="uid://br4bnyjsprbin"
 config/features=PackedStringArray("4.5", "Forward Plus")
 config/icon="res://icon.svg"
 
+[display]
+
+window/size/viewport_width=1400
+window/size/viewport_height=900
+window/size/resizable=true
+
 [autoload]
 
 LLMManager="*res://addons/godot_llm/runtime/llm_manager/LLMManager.gd"

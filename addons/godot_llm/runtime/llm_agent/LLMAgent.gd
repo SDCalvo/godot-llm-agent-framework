@@ -5,7 +5,8 @@ class_name LLMAgent
 ##
 ## Non‑autoload agent abstraction. Runs LLM turns using the configured
 ## `OpenAIWrapper`, handling tool‑calling loops for both `invoke` (discrete)
-## and `ainvoke` (streaming). Tool handlers execute in parallel threads.
+## and `ainvoke` (streaming). Tool handlers execute in parallel threads for
+## optimal performance when multiple tools are called simultaneously.
 ##
 ## Key behaviors
 ## - First turn: you call `invoke(messages)` or `ainvoke(messages)`.
@@ -14,6 +15,9 @@ class_name LLMAgent
 ##     at index 0), the agent returns an error.
 ##   - If `hyper.system_prompt` or `system_prompt` is set and no system message
 ##     is provided, the agent prepends one automatically.
+## - Tool execution: When the LLM requests tool calls, they are executed in
+##   parallel threads for maximum performance, then results are submitted back
+##   as continuations to complete the assistant's response.
 ## - Continuations: within a single turn, only tool outputs are submitted via
 ##   `submit_tool_outputs(response_id, ...)`. We do not resend messages.
 ## - Interruption: call `interrupt()` to cancel the current run. Then
@@ -25,11 +29,11 @@ class_name LLMAgent
 ## Construction
 ## - Via LLMManager (recommended): LLMManager.create_agent(hyper, tools)
 ## - Direct: LLMAgent.create(tools, hyper)
-##   - `hyper` may include: { model, temperature, system_prompt }
+##   - `hyper` may include: { model, temperature, system_prompt, max_output_tokens }
 ##
 ## Examples
 ## ```gdscript
-## var agent := LLMAgent.create([], {"model":"gpt-4o-mini", "system_prompt":"You are a merchant."})
+## var agent := LLMAgent.create([], {"model":"gpt-4o-mini", "system_prompt":"You are a merchant.", "max_output_tokens": 256})
 ## var res := await agent.invoke(Message.user_simple("Greet the player."))
 ## res = await agent.interrupt_with_invoke(Message.user_simple("Change topic: prices?"))
 ## var run_id := agent.ainvoke(Message.user_simple("Stream a greeting."))
@@ -256,13 +260,29 @@ func ainvoke(messages: Array) -> String:
 
 	var stream_id := wrapper.stream_response_start(start_messages, schemas, options)
 	_current_stream_id = stream_id
-	var acc: Dictionary = {"args": {}}  # call_id -> accumulated args string
+	var acc: Dictionary = {
+		"args": {},        # call_id -> accumulated args string
+		"announced": {},   # call_id -> tool info when announced via output_item.added
+		"completed": {},   # call_id -> completed tool results
+		"phase_complete": false  # true when response.completed received
+	}
 
 	# Local handlers filtered by stream_id
 	var on_started = func(id: String, response_id: String):
 		if id != stream_id: return
 		emit_signal("debug", run_id, {"type":"request_started", "response_id": response_id})
 		print("AGENT stream started response_id=", response_id)
+	
+	var on_tool_announced = func(id: String, call_id: String, name: String):
+		if id != stream_id: return
+		acc["announced"][call_id] = {"name": name}
+		print("AGENT tool announced call_id=", call_id, " name=", name, " total_announced=", acc["announced"].size())
+	
+	var on_response_completed = func(id: String):
+		if id != stream_id: return
+		acc["phase_complete"] = true
+		print("AGENT response phase completed, checking if all tools are ready for batch submission")
+		_check_and_submit_batch(id, acc, run_id)
 
 	var on_delta = func(id: String, d: String):
 		if id != stream_id: return
@@ -278,10 +298,14 @@ func ainvoke(messages: Array) -> String:
 
 	var on_tool_done = func(id: String, call_id: String, name: String, args_json: String):
 		if id != stream_id: return
+		print("AGENT on_tool_done START: stream_id=", id, " call_id=", call_id, " name=", name)
 		# IMMEDIATELY set continuation_pending to prevent stream cleanup
 		if wrapper._streams.has(id):
 			wrapper._streams[id]["continuation_pending"] = true
 			print("AGENT set continuation_pending=true for stream=", id)
+		else:
+			print("AGENT WARNING: stream not found in wrapper._streams, id=", id)
+		
 		var cur_full := String(acc["args"].get(call_id, ""))
 		if cur_full == "":
 			cur_full = args_json
@@ -300,9 +324,11 @@ func ainvoke(messages: Array) -> String:
 		if err == OK and typeof(parsed_value) == TYPE_DICTIONARY:
 			acc["args"].erase(call_id)
 			var tool_result := _execute_tool_call({"tool_call_id": call_id, "name": name, "arguments": parsed_value})
-			print("AGENT stream submitting tool result call_id=", call_id, " result=", JSON.stringify(tool_result))
-			# Submit the tool result back to continue the conversation - defer to next frame to avoid race condition
-			call_deferred("_submit_tool_result_deferred", id, [tool_result])
+			acc["completed"][call_id] = tool_result
+			print("AGENT tool completed call_id=", call_id, " total_completed=", acc["completed"].size(), " pending_args=", acc["args"].size())
+			
+			print("AGENT tool completed call_id=", call_id, " checking if ready for batch submission")
+			_check_and_submit_batch(id, acc, run_id)
 			emit_signal("debug", run_id, {"type":"tool_executed", "call_id": call_id, "name": name})
 		else:
 			print("AGENT stream tool done invalid JSON call_id=", call_id)
@@ -323,12 +349,14 @@ func ainvoke(messages: Array) -> String:
 	wrapper.stream_started.connect(on_started)
 	wrapper.stream_delta_text.connect(on_delta)
 	wrapper.stream_tool_call.connect(on_tool)
+	wrapper.stream_tool_call_announced.connect(on_tool_announced)
 	wrapper.stream_tool_call_done.connect(on_tool_done)
+	wrapper.stream_response_completed.connect(on_response_completed)
 	wrapper.stream_finished.connect(on_finished)
 	wrapper.stream_error.connect(on_error)
 
 	# Store disconnectors so we can clean up
-	_stream_connections = [on_started, on_delta, on_tool, on_tool_done, on_finished, on_error]
+	_stream_connections = [on_started, on_delta, on_tool, on_tool_announced, on_tool_done, on_response_completed, on_finished, on_error]
 
 	return run_id
 
@@ -343,14 +371,41 @@ func _disconnect_stream() -> void:
 			wrapper.stream_delta_text.disconnect(c)
 		if wrapper.stream_tool_call.is_connected(c):
 			wrapper.stream_tool_call.disconnect(c)
+		if wrapper.stream_tool_call_announced.is_connected(c):
+			wrapper.stream_tool_call_announced.disconnect(c)
 		if wrapper.stream_tool_call_done.is_connected(c):
 			wrapper.stream_tool_call_done.disconnect(c)
+		if wrapper.stream_response_completed.is_connected(c):
+			wrapper.stream_response_completed.disconnect(c)
 		if wrapper.stream_finished.is_connected(c):
 			wrapper.stream_finished.disconnect(c)
 		if wrapper.stream_error.is_connected(c):
 			wrapper.stream_error.disconnect(c)
 	_stream_connections.clear()
 	_current_stream_id = ""
+
+func _check_and_submit_batch(stream_id: String, acc: Dictionary, run_id: String) -> void:
+	var completed_count = acc["completed"].size()
+	var announced_count = acc["announced"].size()
+	var phase_complete = bool(acc.get("phase_complete", false))
+	
+	print("AGENT batch check: completed=", completed_count, " announced=", announced_count, " phase_complete=", phase_complete)
+	
+	# Only submit when: 1) Response phase is complete AND 2) All announced tools are completed
+	if phase_complete and announced_count > 0 and completed_count == announced_count:
+		print("AGENT submitting batch: phase complete and all ", announced_count, " tools done")
+		var all_results: Array = []
+		for completed_call_id in acc["completed"]:
+			all_results.append(acc["completed"][completed_call_id])
+		wrapper.stream_submit_tool_outputs(stream_id, all_results)
+		emit_signal("debug", run_id, {"type":"tools_batch_executed", "count": all_results.size()})
+		acc["completed"].clear()
+		acc["announced"].clear()
+		acc["phase_complete"] = false
+		print("AGENT batch submitted: ", all_results.size(), " tool results")
+	else:
+		var missing_tools = announced_count - completed_count
+		print("AGENT batch NOT ready: need phase_complete=", not phase_complete, " or missing ", missing_tools, " tools")
 
 ## Build request options by filtering internal keys not understood by the API
 func _request_options() -> Dictionary:
@@ -452,7 +507,5 @@ func _prepare_first_turn(messages: Array) -> Dictionary:
 
 	return {"ok": true, "messages": final_msgs}
 
-## Deferred tool result submission to avoid race conditions
-func _submit_tool_result_deferred(stream_id: String, tool_results: Array) -> void:
-	print("AGENT deferred tool submission stream_id=", stream_id, " results=", tool_results.size())
-	wrapper.stream_submit_tool_outputs(stream_id, tool_results)
+# Note: Removed _submit_tool_result_deferred - immediate submission works better
+# Any delay causes race condition where original stream completes before continuation

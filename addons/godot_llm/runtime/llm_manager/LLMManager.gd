@@ -5,6 +5,22 @@ extends Node
 ## Autoloaded coordinator that configures the `OpenAIWrapper` and serves as a
 ## factory for agents. Reads API key and optional defaults from environment or
 ## `.env`, instantiates the wrapper, and exposes convenience creation APIs.
+##
+## Key features:
+## - Automatic API key resolution from environment or .env file
+## - Centralized OpenAI wrapper configuration
+## - Agent factory with tool registry integration
+## - Default model and parameter management
+##
+## Usage:
+## ```gdscript
+## # Create agent with tools from registry
+## var agent = LLMManager.create_agent({"model": "gpt-4o-mini"}, LLMToolRegistry.get_all())
+## 
+## # Or create with specific tools
+## var tools = [my_tool1, my_tool2]
+## var agent = LLMManager.create_agent({"temperature": 0.7}, tools)
+## ```
 
 # LLMManager: central coordinator for model interactions and agent control.
 # Autoloaded singleton (registered by the EditorPlugin).
