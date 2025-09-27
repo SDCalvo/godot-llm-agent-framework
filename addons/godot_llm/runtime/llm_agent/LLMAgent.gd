@@ -219,7 +219,7 @@ func invoke(messages: Array) -> Dictionary:
 		for call in tool_calls:
 			var th := Thread.new()
 			threads.append(th)
-			th.start(Callable(self, "_thread_execute_tool").bind(call))
+			th.start(Callable(self, "_execute_tool_call").bind(call))
 
 		var tool_outputs: Array = []
 		for th in threads:
@@ -396,11 +396,6 @@ func _execute_tool_call(call: Dictionary) -> Dictionary:
 		return {"tool_call_id": call_id, "output": JSON.stringify({"ok": false, "error": {"type": "unknown_tool", "name": name}})}
 	var result: Dictionary = tool.execute(args)
 	return {"tool_call_id": call_id, "output": JSON.stringify(result)}
-
-func _thread_execute_tool(call: Dictionary) -> Dictionary:
-	# Called on a worker thread; delegate to the same execution helper
-	return _execute_tool_call(call)
-
 
 ## Internal: build first-turn messages from provided messages or history and
 ## enforce single system prompt at index 0. If messages includes a system

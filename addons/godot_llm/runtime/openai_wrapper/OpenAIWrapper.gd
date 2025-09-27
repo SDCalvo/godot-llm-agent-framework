@@ -493,37 +493,29 @@ func _handle_sse_event(stream_id: String, block: String) -> void:
 		emit_signal("stream_delta_text", stream_id, delta_text_b)
 		print("WRAPPER SSE delta(len)=", delta_text_b.length())
 		return
-	# Buffer function-call argument deltas by item_id
+	# Buffer function-call argument deltas
 	if event_type == "response.function_call_arguments.delta":
 		print("WRAPPER handle func_args.delta obj=", JSON.stringify(obj, "  "))
-		var item_id_fc := String(obj.get("item_id", ""))
+		var item_id := String(obj.get("item_id", ""))
 		var delta_str := String(obj.get("delta", ""))
-		if item_id_fc != "" and delta_str != "":
-			var calls_fc: Dictionary = _streams[stream_id].get("fncalls", {})
-			var rec_fc: Dictionary = calls_fc.get(item_id_fc, {})
-			if rec_fc.is_empty():
-				var call_lookup := String(obj.get("call_id", ""))
-				if call_lookup != "":
-					rec_fc = calls_fc.get(call_lookup, rec_fc)
-			if rec_fc.is_empty():
-				rec_fc = {
+		if item_id != "" and delta_str != "":
+			var calls: Dictionary = _streams[stream_id].get("fncalls", {})
+			# Get or create function call record
+			var rec: Dictionary = calls.get(item_id, {})
+			if rec.is_empty():
+				rec = {
 					"name": "",
 					"buf": "",
 					"call_id": String(obj.get("call_id", ""))
 				}
-			var existing_buf := String(rec_fc.get("buf", ""))
-			rec_fc["buf"] = existing_buf + delta_str
-			var name_fc := String(rec_fc.get("name", ""))
-			var call_id_emit := String(rec_fc.get("call_id", ""))
-			if call_id_emit == "":
-				call_id_emit = item_id_fc
-			rec_fc["call_id"] = call_id_emit
-			calls_fc[item_id_fc] = rec_fc
-			if call_id_emit != item_id_fc:
-				calls_fc[call_id_emit] = rec_fc
-			_streams[stream_id]["fncalls"] = calls_fc
-			print("WRAPPER func_args.delta emit call_id=", call_id_emit, " name=", name_fc, " delta_len=", delta_str.length())
-			emit_signal("stream_tool_call", stream_id, call_id_emit, name_fc, delta_str)
+				calls[item_id] = rec
+			# Append delta to buffer
+			rec["buf"] = String(rec.get("buf", "")) + delta_str
+			var call_id := String(rec.get("call_id", item_id))
+			var name := String(rec.get("name", ""))
+			_streams[stream_id]["fncalls"] = calls
+			print("WRAPPER func_args.delta emit call_id=", call_id, " name=", name, " delta_len=", delta_str.length())
+			emit_signal("stream_tool_call", stream_id, call_id, name, delta_str)
 		return
 	if event_type == "response.completed":
 		var final_text2 := String(_streams[stream_id].get("final_text", ""))
@@ -545,22 +537,18 @@ func _handle_sse_event(stream_id: String, block: String) -> void:
 		emit_signal("stream_error", stream_id, obj.get("error", obj))
 		_streams.erase(stream_id)
 		return
-	# Optional lifecycle helpers to capture content in non-delta packets
+	# Initialize function call when item is added
 	if event_type == "response.output_item.added":
 		print("WRAPPER SSE item.added")
 		print("WRAPPER item.added obj=", JSON.stringify(obj, "  "))
 		var item: Variant = obj.get("item", {})
 		if typeof(item) == TYPE_DICTIONARY and String(item.get("type", "")) == "function_call":
 			var item_id := String(item.get("id", ""))
-			var name_a := String(item.get("name", ""))
-			var api_call_id := String(item.get("call_id", ""))
-			var calls_a: Dictionary = _streams[stream_id].get("fncalls", {})
-			var rec := {"name": name_a, "buf": "", "call_id": api_call_id}
-			if item_id != "":
-				calls_a[item_id] = rec
-			if api_call_id != "":
-				calls_a[api_call_id] = rec
-			_streams[stream_id]["fncalls"] = calls_a
+			var name := String(item.get("name", ""))
+			var call_id := String(item.get("call_id", ""))
+			var calls: Dictionary = _streams[stream_id].get("fncalls", {})
+			calls[item_id] = {"name": name, "buf": "", "call_id": call_id}
+			_streams[stream_id]["fncalls"] = calls
 		return
 	if event_type == "response.content_part.added":
 		var content: Variant = obj.get("content", {})
@@ -573,27 +561,24 @@ func _handle_sse_event(stream_id: String, block: String) -> void:
 		return
 	if event_type == "response.function_call_arguments.done":
 		print("WRAPPER handle func_args.done obj=", JSON.stringify(obj, "  "))
-		var item_id_d := String(obj.get("item_id", obj.get("id", "")))
-		var call_id_d := String(obj.get("call_id", ""))
-		var args_d := String(obj.get("arguments", ""))
-		var calls_d: Dictionary = _streams[stream_id].get("fncalls", {})
-		var rec2: Dictionary = calls_d.get(item_id_d, calls_d.get(call_id_d, {}))
-		if rec2.is_empty():
-			rec2 = {"name": "", "buf": "", "call_id": call_id_d}
-		var name_d := String(rec2.get("name", ""))
-		var api_call_id2 := String(rec2.get("call_id", call_id_d))
-		# If no arguments on done, fall back to accumulated buffer
-		if args_d == "":
-			args_d = String(rec2.get("buf", ""))
-		var final_args := args_d
-		print("WRAPPER func_args.done item_id=", item_id_d, " raw_call_id=", call_id_d, " resolved_call_id=", api_call_id2, " name=", name_d, " final_args_len=", final_args.length())
-		calls_d.erase(item_id_d)
-		if call_id_d != "":
-			calls_d.erase(call_id_d)
-		_streams[stream_id]["fncalls"] = calls_d
-		emit_signal("stream_tool_call", stream_id, api_call_id2, name_d, final_args)
-		emit_signal("stream_tool_call_done", stream_id, api_call_id2, name_d, final_args)
-		print("WRAPPER SSE func_args.done call_id=", api_call_id2, " name=", name_d, " args_len=", final_args.length())
+		var item_id := String(obj.get("item_id", ""))
+		var args_json := String(obj.get("arguments", ""))
+		var calls: Dictionary = _streams[stream_id].get("fncalls", {})
+		var rec: Dictionary = calls.get(item_id, {})
+		
+		# Use provided arguments or fall back to buffered content
+		var final_args := args_json if args_json != "" else String(rec.get("buf", ""))
+		var call_id := String(rec.get("call_id", item_id))
+		var name := String(rec.get("name", ""))
+		
+		print("WRAPPER func_args.done item_id=", item_id, " resolved_call_id=", call_id, " name=", name, " final_args_len=", final_args.length())
+		
+		# Clean up and emit completion signals
+		calls.erase(item_id)
+		_streams[stream_id]["fncalls"] = calls
+		emit_signal("stream_tool_call", stream_id, call_id, name, final_args)
+		emit_signal("stream_tool_call_done", stream_id, call_id, name, final_args)
+		print("WRAPPER SSE func_args.done call_id=", call_id, " name=", name, " args_len=", final_args.length())
 		return
 
 func _parse_base_url(base_url: String) -> Dictionary:
