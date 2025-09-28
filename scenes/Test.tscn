@@ -1,4 +1,4 @@
-[gd_scene load_steps=3 format=3 uid="uid://br4bnyjsprbin"]
+[gd_scene load_steps=3 format=3 uid="uid://cddqpilyalv2x"]
 
 [ext_resource type="Script" uid="uid://ke4cs1h8c1s7" path="res://scenes/control.gd" id="1_wen4y"]
 
@@ -6,44 +6,72 @@
 script/source = "extends Camera2D
 
 const CAMERA_SPEED = 500.0
-const EDGE_MARGIN = 50.0
 const ZOOM_SPEED = 0.1
 const MIN_ZOOM = 0.2
 const MAX_ZOOM = 3.0
 
+var is_middle_dragging = false
+
 func _ready():
 	enabled = true
+	global_position = Vector2.ZERO
+	print(\"Camera starting at position: \", global_position)
+	
+	# Create background after scene is fully ready
+	create_shader_checkerboard.call_deferred()
 
-func _process(delta):
-	var viewport_size = get_viewport().get_visible_rect().size
-	var screen_mouse_pos = get_viewport().get_mouse_position()
-	var move_vector = Vector2.ZERO
+func create_shader_checkerboard():
+	# Get the World node to add our visual elements
+	var world_node = get_parent().get_node(\"World\")
 	
-	# Check edges for camera movement
-	if screen_mouse_pos.x < EDGE_MARGIN:
-		move_vector.x = -1
-	elif screen_mouse_pos.x > viewport_size.x - EDGE_MARGIN:
-		move_vector.x = 1
+	# Create grid lines using Polygon2D for proper Node2D rendering
+	for i in range(-15, 16):
+		# Vertical lines
+		var v_line = Polygon2D.new()
+		v_line.polygon = PackedVector2Array([
+			Vector2(i * 200, -3000),
+			Vector2(i * 200 + 2, -3000),
+			Vector2(i * 200 + 2, 3000),
+			Vector2(i * 200, 3000)
+		])
+		v_line.color = Color(0.7, 0.7, 0.7, 0.5)
+		v_line.z_index = -50
+		world_node.add_child(v_line)
+		
+		# Horizontal lines
+		var h_line = Polygon2D.new()
+		h_line.polygon = PackedVector2Array([
+			Vector2(-3000, i * 200),
+			Vector2(3000, i * 200),
+			Vector2(3000, i * 200 + 2),
+			Vector2(-3000, i * 200 + 2)
+		])
+		h_line.color = Color(0.7, 0.7, 0.7, 0.5)
+		h_line.z_index = -50
+		world_node.add_child(h_line)
 	
-	if screen_mouse_pos.y < EDGE_MARGIN:
-		move_vector.y = -1
-	elif screen_mouse_pos.y > viewport_size.y - EDGE_MARGIN:
-		move_vector.y = 1
-	
-	# Apply movement
-	if move_vector.length() > 0:
-		global_position += move_vector.normalized() * CAMERA_SPEED * delta / zoom.x
+	print(\"Grid background created with Polygon2D nodes\")
 
 func _input(event):
-	# Zoom with mouse wheel
 	if event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
+		if event.button_index == MOUSE_BUTTON_MIDDLE:
+			if event.pressed:
+				is_middle_dragging = true
+				print(\"Middle drag started at camera position: \", global_position)
+				get_viewport().set_input_as_handled()
+			else:
+				is_middle_dragging = false
+				print(\"Middle drag stopped at camera position: \", global_position)
+				get_viewport().set_input_as_handled()
+		elif event.button_index == MOUSE_BUTTON_WHEEL_UP:
 			zoom_camera(ZOOM_SPEED)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			zoom_camera(-ZOOM_SPEED)
-	
-	# WASD movement
-	if event is InputEventKey and event.pressed:
+	elif event is InputEventMouseMotion and is_middle_dragging:
+		var mouse_delta = event.relative
+		global_position -= mouse_delta / zoom.x
+		get_viewport().set_input_as_handled()
+	elif event is InputEventKey and event.pressed:
 		var move_vector = Vector2.ZERO
 		if event.keycode == KEY_W or event.keycode == KEY_UP:
 			move_vector.y = -1
@@ -53,9 +81,9 @@ func _input(event):
 			move_vector.x = -1
 		elif event.keycode == KEY_D or event.keycode == KEY_RIGHT:
 			move_vector.x = 1
-		
 		if move_vector.length() > 0:
 			global_position += move_vector.normalized() * CAMERA_SPEED * 0.016 / zoom.x
+			print(\"WASD moved camera to: \", global_position)
 
 func zoom_camera(zoom_delta):
 	var new_zoom = zoom + Vector2(zoom_delta, zoom_delta)
@@ -75,27 +103,29 @@ script = SubResource("GDScript_1")
 
 [node name="Entities" type="Node2D" parent="World"]
 
-[node name="TestUI" type="Control" parent="."]
+[node name="TestUI" type="CanvasLayer" parent="."]
+script = ExtResource("1_wen4y")
+
+[node name="UIContainer" type="Control" parent="TestUI"]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-script = ExtResource("1_wen4y")
 
-[node name="TestButtonsPanel" type="Panel" parent="TestUI"]
+[node name="TestButtonsPanel" type="Panel" parent="TestUI/UIContainer"]
 layout_mode = 1
-anchors_preset = 2
-anchor_top = 1.0
-anchor_bottom = 1.0
-offset_left = 20.0
-offset_top = -120.0
-offset_right = 800.0
-offset_bottom = -20.0
-grow_vertical = 0
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -524.0
+offset_top = 520.0
+offset_right = -1.0
+offset_bottom = 600.0
+grow_horizontal = 0
 
-[node name="ButtonGrid" type="GridContainer" parent="TestUI/TestButtonsPanel"]
+[node name="ButtonGrid" type="GridContainer" parent="TestUI/UIContainer/TestButtonsPanel"]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -108,53 +138,49 @@ grow_horizontal = 2
 grow_vertical = 2
 columns = 4
 
-[node name="WrapperCallBtn" type="Button" parent="TestUI/TestButtonsPanel/ButtonGrid"]
+[node name="WrapperCallBtn" type="Button" parent="TestUI/UIContainer/TestButtonsPanel/ButtonGrid"]
 layout_mode = 2
 text = "Wrapper Call"
 
-[node name="WrapperStreamBtn" type="Button" parent="TestUI/TestButtonsPanel/ButtonGrid"]
+[node name="WrapperStreamBtn" type="Button" parent="TestUI/UIContainer/TestButtonsPanel/ButtonGrid"]
 layout_mode = 2
 text = "Wrapper Stream"
 
-[node name="AgentInvokeBtn" type="Button" parent="TestUI/TestButtonsPanel/ButtonGrid"]
+[node name="AgentInvokeBtn" type="Button" parent="TestUI/UIContainer/TestButtonsPanel/ButtonGrid"]
 layout_mode = 2
 text = "Agent Invoke"
 
-[node name="AgentStreamBtn" type="Button" parent="TestUI/TestButtonsPanel/ButtonGrid"]
+[node name="AgentStreamBtn" type="Button" parent="TestUI/UIContainer/TestButtonsPanel/ButtonGrid"]
 layout_mode = 2
 text = "Agent Stream"
 
-[node name="BuilderToolsBtn" type="Button" parent="TestUI/TestButtonsPanel/ButtonGrid"]
+[node name="BuilderToolsBtn" type="Button" parent="TestUI/UIContainer/TestButtonsPanel/ButtonGrid"]
 layout_mode = 2
 text = "Builder Tools Test"
 
-[node name="SpawnEntityBtn" type="Button" parent="TestUI/TestButtonsPanel/ButtonGrid"]
+[node name="SpawnEntityBtn" type="Button" parent="TestUI/UIContainer/TestButtonsPanel/ButtonGrid"]
 layout_mode = 2
 text = "Spawn Entity"
 
-[node name="CalcDistanceBtn" type="Button" parent="TestUI/TestButtonsPanel/ButtonGrid"]
+[node name="CalcDistanceBtn" type="Button" parent="TestUI/UIContainer/TestButtonsPanel/ButtonGrid"]
 layout_mode = 2
 text = "Calc Distance"
 
-[node name="RandomColorBtn" type="Button" parent="TestUI/TestButtonsPanel/ButtonGrid"]
+[node name="RandomColorBtn" type="Button" parent="TestUI/UIContainer/TestButtonsPanel/ButtonGrid"]
 layout_mode = 2
 text = "Random Color"
 
-[node name="OutputConsole" type="Panel" parent="TestUI"]
+[node name="OutputConsole" type="Panel" parent="TestUI/UIContainer"]
 layout_mode = 1
-anchors_preset = 3
-anchor_left = 1.0
+anchors_preset = 12
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = -400.0
 offset_top = -300.0
-offset_right = -20.0
-offset_bottom = -20.0
-grow_horizontal = 0
+grow_horizontal = 2
 grow_vertical = 0
 
-[node name="ConsoleContainer" type="VBoxContainer" parent="TestUI/OutputConsole"]
+[node name="ConsoleContainer" type="VBoxContainer" parent="TestUI/UIContainer/OutputConsole"]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -166,38 +192,37 @@ offset_bottom = -10.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="ConsoleHeader" type="Label" parent="TestUI/OutputConsole/ConsoleContainer"]
+[node name="ConsoleHeader" type="Label" parent="TestUI/UIContainer/OutputConsole/ConsoleContainer"]
 layout_mode = 2
-text = "Test Output Console"
+text = "🤖 LLM Test Output Console"
 horizontal_alignment = 1
 
-[node name="ConsoleOutput" type="RichTextLabel" parent="TestUI/OutputConsole/ConsoleContainer"]
+[node name="ConsoleOutput" type="RichTextLabel" parent="TestUI/UIContainer/OutputConsole/ConsoleContainer"]
 layout_mode = 2
 size_flags_vertical = 3
-bbcode_enabled = true
-text = "[color=green]Ready for testing...[/color]"
-fit_content = true
+focus_mode = 2
 scroll_following = true
+selection_enabled = true
 
-[node name="ConsoleControls" type="HBoxContainer" parent="TestUI/OutputConsole/ConsoleContainer"]
+[node name="ConsoleControls" type="HBoxContainer" parent="TestUI/UIContainer/OutputConsole/ConsoleContainer"]
 layout_mode = 2
 
-[node name="ClearBtn" type="Button" parent="TestUI/OutputConsole/ConsoleContainer/ConsoleControls"]
+[node name="ClearBtn" type="Button" parent="TestUI/UIContainer/OutputConsole/ConsoleContainer/ConsoleControls"]
 layout_mode = 2
 text = "Clear"
 
-[node name="CopyBtn" type="Button" parent="TestUI/OutputConsole/ConsoleContainer/ConsoleControls"]
+[node name="CopyBtn" type="Button" parent="TestUI/UIContainer/OutputConsole/ConsoleContainer/ConsoleControls"]
 layout_mode = 2
-text = "Copy"
+text = "Copy All"
 
-[node name="InfoLabel" type="Label" parent="TestUI"]
+[node name="InfoLabel" type="Label" parent="TestUI/UIContainer"]
 layout_mode = 1
 anchors_preset = 2
 anchor_top = 1.0
 anchor_bottom = 1.0
-offset_left = 20.0
-offset_top = -140.0
-offset_right = 600.0
-offset_bottom = -120.0
+offset_left = 2.0
+offset_top = -325.0
+offset_right = 699.0
+offset_bottom = -302.0
 grow_vertical = 0
-text = "Move camera: Mouse edges or WASD | Zoom: Mouse wheel | Tests output to console →"
+text = "Move camera: Middle-click drag or WASD | Zoom: Mouse wheel | Tests output to console ↓"

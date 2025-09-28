@@ -1,4 +1,4 @@
-extends Control
+extends CanvasLayer
 
 const OpenAIWrapper = preload("res://addons/godot_llm/runtime/openai_wrapper/OpenAIWrapper.gd")
 var LLMAgentClass: Script = load("res://addons/godot_llm/runtime/llm_agent/LLMAgent.gd")
@@ -53,18 +53,18 @@ func _ready() -> void:
 	log_success("✅ Test suite ready! Use buttons to run tests.")
 
 func _setup_ui_references() -> void:
-	console_output = $OutputConsole/ConsoleContainer/ConsoleOutput
-	clear_btn = $OutputConsole/ConsoleContainer/ConsoleControls/ClearBtn
-	copy_btn = $OutputConsole/ConsoleContainer/ConsoleControls/CopyBtn
+	console_output = $UIContainer/OutputConsole/ConsoleContainer/ConsoleOutput
+	clear_btn = $UIContainer/OutputConsole/ConsoleContainer/ConsoleControls/ClearBtn
+	copy_btn = $UIContainer/OutputConsole/ConsoleContainer/ConsoleControls/CopyBtn
 	
-	wrapper_call_btn = $TestButtonsPanel/ButtonGrid/WrapperCallBtn
-	wrapper_stream_btn = $TestButtonsPanel/ButtonGrid/WrapperStreamBtn
-	agent_invoke_btn = $TestButtonsPanel/ButtonGrid/AgentInvokeBtn
-	agent_stream_btn = $TestButtonsPanel/ButtonGrid/AgentStreamBtn
-	builder_tools_btn = $TestButtonsPanel/ButtonGrid/BuilderToolsBtn
-	spawn_entity_btn = $TestButtonsPanel/ButtonGrid/SpawnEntityBtn
-	calc_distance_btn = $TestButtonsPanel/ButtonGrid/CalcDistanceBtn
-	random_color_btn = $TestButtonsPanel/ButtonGrid/RandomColorBtn
+	wrapper_call_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/WrapperCallBtn"
+	wrapper_stream_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/WrapperStreamBtn"
+	agent_invoke_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/AgentInvokeBtn"
+	agent_stream_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/AgentStreamBtn"
+	builder_tools_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/BuilderToolsBtn"
+	spawn_entity_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/SpawnEntityBtn"
+	calc_distance_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/CalcDistanceBtn"
+	random_color_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/RandomColorBtn"
 	
 	# Connect console controls
 	clear_btn.pressed.connect(func(): console_output.text = "")

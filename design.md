@@ -1,204 +1,117 @@
-godot_llm – Design Overview (v1.0)
+# LLM Add-on TODO List
 
-## Goals ✅ ACHIEVED
+## 🎯 Current Status
 
-- Ship only the LLM plumbing for Godot 4: simple to use, extensible, game-agnostic.
-- Minimal, ergonomic APIs for messages, tools, and agents; great defaults; clear signals for debugging.
-- **NEW**: Robust streaming with parallel tool execution and race condition prevention.
+- ✅ **Buttons Working!** - Fixed CanvasLayer input bug by moving to standard Control hierarchy
+- ✅ **Console Scrolling** - Works properly
+- ✅ **WASD Camera Movement** - Working correctly
+- ✅ **LLM Agent Streaming** - Parallel tool calls and race conditions resolved
+- ✅ **Thread Safety** - Tool registry handles node access properly
 
-## Recent Improvements (v1.0)
+## 🔧 Immediate Fixes Needed
 
-- **Streaming Race Conditions**: Fixed complex timing issues in stream continuations with `continuation_pending` flags
-- **Function Call Buffering**: Simplified from 100+ lines to ~45 lines while maintaining functionality
-- **Parallel Tool Execution**: Optimized multi-threading for simultaneous tool calls in games
-- **Code Cleanup**: Removed redundant functions and over-engineered fallback logic
-- **Documentation**: Complete API documentation with threading considerations and usage examples
+### 1. **Middle-Click Camera Drag** 🖱️
 
-## Runtime Components
+- **Issue**: Middle mouse button drag not working for camera movement
+- **Current**: WASD works fine, but middle-click drag doesn't respond
+- **Debug**: Camera script uses `_unhandled_input()` with `MOUSE_BUTTON_MIDDLE` detection
+- **Possible Causes**:
+  - Input event not reaching camera script
+  - UI elements consuming middle-click events
+  - Event handling order issues
+- **Next Steps**:
+  - Add more debug prints to see if middle-click events are detected
+  - Try `_input()` instead of `_unhandled_input()`
+  - Check if any UI elements are blocking input
 
-- **Autoload singletons**
-  - LLMManager: shared config, factory for agents, central debug bus.
-  - LLMToolRegistry: convenience holder for Tool instances (no enable/disable logic).
-  - LLMBoardManager: shared blackboard; world-agnostic messaging surface (placeholder).
-- **Non‑autoload**
-  - OpenAIWrapper: transport only (Responses API). Non‑streaming + optimized SSE streaming.
-  - LLMAgent: single agent class with tool-calling loop (invoke/ainvoke) + parallel tool execution.
-  - LLMTool: user-defined function calls with JSON Schema.
-  - LLMMessage: compact multimodal message builder.
+### 2. **Console Scroll vs World Zoom Conflict** 🎯
 
-Security / keys
+- **Issue**: Mouse wheel scrolls console BUT also zooms world camera simultaneously
+- **Expected**: Mouse wheel should only zoom world when NOT over console
+- **Current**: Both actions happen at once
+- **Solution Needed**:
+  - Detect when mouse is over console area
+  - Prevent camera zoom when scrolling console
+  - Use input event consumption properly
 
-- Keys are never hardcoded. Resolution order:
-  1. Explicit set via API (LLMManager/Wrapper)
-  2. Environment var OPENAI_API_KEY
-  3. .env file at project root (git-ignored)
-  4. EditorSettings (editor-only convenience; optional future dock)
+### 3. **Button Panel Sizing** 📏
 
-Export inclusion
+- **Issue**: Button panel is too large
+- **Current**: Panel offset values are very large (`-926.0`, `396.0`)
+- **Needed**: Resize to more reasonable dimensions
+- **Target**: Compact panel that fits buttons nicely
 
-- LLMManager preloads non-autoload classes to guarantee they are exported.
+## 🎨 UI/UX Improvements
 
-OpenAIWrapper (transport)
+### 4. **Camera Controls Polish**
 
-- Config
-  - set_api_key(key: String)
-  - set_base_url(url: String)
-  - set_default_model(model: String)
-  - set_default_params(params: Dictionary)
-- Helpers (build content pieces)
-  - make_text_message(role, text)
-  - make_image_message(role, image_url, detail="auto")
-  - make_audio_input(role, wav_bytes, format="wav")
-- Non‑streaming
-  - create_response(messages: Array, tools: Array = [], options: Dictionary = {}) → Result
-  - submit_tool_outputs(response_id: String, tool_outputs: Array) → Result
-  - Result (normalized):
-    {
-    status: "assistant" | "tool_calls" | "error",
-    assistant_text?: String,
-    tool_calls?: Array, # [{tool_call_id, name, arguments}]
-    response_id?: String,
-    usage?: Dictionary,
-    model?: String,
-    http_code?: int,
-    error?: Dictionary,
-    raw?: Dictionary
-    }
-- Streaming (SSE via HTTPClient)
-  - stream_response_start(messages, tools=[], options={}) → stream_id: String
-  - stream_submit_tool_outputs(stream_id, tool_outputs) → void (best-effort; may fall back to non-streaming)
-  - stream_cancel(stream_id) → void
-  - Signals: stream_started(id, response_id), stream_delta_text(id, text), stream_tool_call(id, call_id, name, args_delta), stream_finished(id, ok, final_text, usage), stream_error(id, err)
+- **Add visual feedback** for camera controls (crosshair, grid snapping)
+- **Improve zoom limits** and smooth zoom behavior
+- **Add camera reset** button to return to (0,0)
 
-Tool
+### 5. **Console Enhancements**
 
-- Factory
-  - create_tool(name: String, description: String, schema: Dictionary, handler: Callable) → Tool
-    - schema is plain Dictionary (JSON Schema-like). Conversion to OpenAI tool schema happens internally.
-- Methods
-  - to_openai_schema() → Dictionary
-  - execute(args: Dictionary) → { ok: bool, data?: Variant, error?: Dictionary }
-- Fields
-  - name, description, schema, handler
+- **Auto-scroll to bottom** when new content added
+- **Syntax highlighting** for LLM responses
+- **Timestamp** for each test output
+- **Export/save** console output to file
 
-LLMToolRegistry (autoload)
+### 6. **Button Layout Optimization**
 
-- Purpose: simple container for Tool instances.
-- API
-  - register(tool: Tool) → void
-  - get_all() → Array[Tool]
-  - get_schemas() → Array[Dictionary] # OpenAI-ready
-  - clear() → void
+- **Group related buttons** (Wrapper tests, Agent tests, Tool tests)
+- **Add tooltips** explaining what each test does
+- **Visual feedback** when tests are running (loading indicators)
 
-LLMMessage (multimodal builder)
+## 🔧 Technical Debt
 
-- One constructor, array out. Responses API supports multiple content items per message, so this typically returns a single item array.
-- API
-  - Message.new(role: String, text: Variant = null, images: Array = null, audio: Array = null, opts: Dictionary = {}) → Array[Message]
-    - role: "user" | "assistant" | "system"
-    - text: String or Array[String]
-    - images: Array of urls or resources; we serialize to {type:"input_image", image_url:..., detail}
-    - audio: Array of PackedByteArray/AudioStream; we base64 with {type:"input_audio", audio:{format,data}}
-    - opts: {image_detail: "auto", audio_format: "wav"}
-    - Returns: [{ role, content:[{type:"input_text"|"input_image"|"input_audio", ...}, ...] }] (or multiple if a splitting constraint appears later)
-  - Message.user(...), Message.system(...): shorthands returning Array[Message]
-  - to_openai(messages: Array[Message]) → Array[Dictionary] # passthrough
+### 7. **Code Organization**
 
-LLMAgent (user-facing)
+- **Split control.gd** into smaller, focused scripts
+- **Extract test functions** into separate test manager class
+- **Improve error handling** and user feedback
 
-- Factory
-  - LLMManager.create_agent(hyper: Dictionary, tools: Array[Tool]) → LLMAgent
-    - Manager owns/configures OpenAIWrapper; agents resolve it internally.
-  - LLMAgent.create(tools: Array[Tool], hyper: Dictionary) → LLMAgent
-    - hyper keys (subset): model, temperature, system_prompt
-- Message history CRUD
-  - get_history() → Array; clear_history() → void
-  - append_user(texts=[], images=[], audios=[], opts={}) → void
-  - append_assistant(texts=[]) → void
-  - pop_last() → Variant
-  - replace_history(messages: Array) → void (validates single system at index 0)
-  - set_system_prompt(text: String) → void (single system prompt; enforced)
-- Calls
-  - invoke(messages: Array[Message]) → { ok, text?, usage?, error? }
-  - ainvoke(messages: Array[Message]) → run_id: String (streaming; see signals)
-  - interrupt() → void
-  - resume() → Dictionary (equivalent to invoke([]))
-  - stream_resume() → String (equivalent to ainvoke([]))
-  - interrupt_with_new_messages(messages) → void (append only)
-  - interrupt_with_invoke(messages) → Dictionary (cancel, append, invoke)
-  - interrupt_with_ainvoke(messages) → String (cancel, append, ainvoke)
-- Signals
-  - debug(run_id: String, event: Dictionary) # request_started/tool_calls/tool_result/request_finished
-  - delta(run_id: String, text_delta: String)
-  - finished(run_id: String, ok: bool, result: Dictionary)
-  - error(run_id: String, err: Dictionary)
-- Loop policy
-  - First turn: create_response(messages, tools)
-  - While status == "tool_calls": execute tools in parallel → submit_tool_outputs(response_id, outputs)
-  - When status == "assistant": stop and return
-  - Continuations: do not resend full messages; server maintains state via response_id
-  - Interruption: cancel current run/stream, optionally append new messages, start a new turn
-  - System prompt rules: exactly one system message at index 0; if provided out of place or multiple → error; if absent and system_prompt is set → prepend automatically
+### 8. **Performance Optimization**
 
-LLMManager (autoload)
+- **Optimize camera following** script (currently runs every frame)
+- **Lazy load** LLM components only when needed
+- **Memory management** for large console outputs
 
-- Purpose: convenience glue + global debug bus.
-- API
-  - set_api_key, set_default_model, set_default_params
-  - create_agent(hyper: Dictionary, tools: Array[Tool]) → LLMAgent
-- Signals (broadcasted mirrors of agent events): agent_started/agent_delta/agent_finished/agent_error
+## 🚀 Future Features
 
-LLMBoardManager (autoload)
+### 9. **Advanced Testing**
 
-- Purpose: shared blackboard for agents (optional in the loop).
-- Minimal API (subject to future expansion)
-  - ensure_board(participants: Array) → board_id
-  - post(board_id, message: Dictionary) → void
-  - read(board_id, since_index:int=0) → Array[Dictionary]
-  - get_my_boards(agent_id) → Array[board_id]
-- Optional message tools we may ship later: read_board, post_message_to_board, get_my_boards
+- **Automated test suite** for all LLM functionality
+- **Performance benchmarks** for different model sizes
+- **Stress testing** with multiple parallel agents
 
-Error taxonomy
+### 10. **Developer Experience**
 
-- http_error (code, message), request_error, transport_error, rate_limited (retry_after), tool_error (name, details), parse_error
-- Result envelopes across layers uniformly use: { ok: true, ... } or { ok: false, type, message, details? }
+- **Better documentation** with code examples
+- **Video tutorials** for common use cases
+- **Template scenes** for quick setup
 
-Streaming semantics (ainvoke)
+## 📋 Session Notes
 
-- Start with OpenAIWrapper.stream_response_start; forward deltas via LLMAgent.delta.
-- When tool-calls are emitted mid-stream, emit debug(tool_calls), gather outputs, and continue via stream_submit_tool_outputs (fallback to non-streaming continuation if needed).
-- Emit finished(run_id, ok, result) at completion/cancel.
+### Last Session Progress:
 
-Example usage (discrete)
+1. **Fixed major CanvasLayer bug** - Buttons now clickable by moving to standard Control hierarchy
+2. **Resolved script inheritance error** - Moved control.gd to proper CanvasLayer
+3. **Implemented proper signal connections** - All button handlers working
+4. **Eliminated input region misalignment** - No more visual/input offset issues
 
-```gdscript
-var tool := Tool.create_tool(
-    "read_board",
-    "Read messages from a board",
-    {"type":"object","properties":{"board_id":{"type":"string"}},"required":["board_id"]},
-    func(args):
-        var msgs = BoardManager.read(args.board_id)
-        return {"ok": true, "data": msgs}
-)
+### Key Learnings:
 
-ToolRegistry.register(tool)
+- **CanvasLayer offset manipulation** causes known Godot input bugs
+- **Standard Control anchoring** is more reliable for UI elements
+- **Thread safety** critical for LLM tool execution
+- **Streaming API race conditions** require careful batch handling
 
-var agent = LLMManager.create_agent({"model":"gpt-4o-mini","temperature":0.2}, ToolRegistry.get_all())
-var msgs = Message.user("Summarize the latest messages from board X.")
-var result = await agent.invoke(msgs)
-```
+---
 
-Example usage (streaming)
+## 🎯 Next Session Priority:
 
-```gdscript
-var agent = LLMManager.create_agent({"model":"gpt-4o-mini","temperature":0.2}, ToolRegistry.get_all())
-var msgs = Message.user("Describe this image while I watch.", images:[image_url])
-var run_id = agent.ainvoke(msgs)
-agent.delta.connect(func(id, d): if id==run_id: label.append_text(d))
-agent.finished.connect(func(id, ok, r): if id==run_id: print("done", ok))
-```
+1. **Fix middle-click camera drag** (highest priority)
+2. **Resolve console scroll/zoom conflict**
+3. **Resize button panel** for better UX
 
-Notes
-
-- All APIs and names subject to refinement as we implement.
-- Keep user surface minimal; advanced hooks exist via subclassing LLMAgent or providing custom Tool handlers.
+**Estimated Time**: 1-2 hours for core fixes, additional time for polish features.
