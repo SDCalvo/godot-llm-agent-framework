@@ -98,9 +98,9 @@ func _test_phase_2_parallel_sending() -> bool:
 	log_phase("Phase 2: TRUE Concurrent Async Email Sending")
 	
 	var email_tasks = [
-		{"agent": merchant_agent, "prompt": "Send a broadcast email to Town Guard, Project Coordinator, and Support Specialist about a new supply shipment arriving."},
-		{"agent": guard_agent, "prompt": "Send an email to Project Coordinator about updated security protocols."},
-		{"agent": support_agent, "prompt": "Send an email to Village Merchant offering assistance with inventory management."}
+		{"agent": merchant_agent, "prompt": "You can ONLY communicate through emails. Use the send_email tool to send an email to ['Town Guard', 'Project Coordinator', 'Support Specialist'] with subject 'New Supply Shipment Arriving' and tell them a supply shipment will arrive next week and needs coordination for unloading."},
+		{"agent": guard_agent, "prompt": "You can ONLY communicate through emails. Use the send_email tool to send an email to ['Project Coordinator'] with subject 'Updated Security Protocols' and inform them about new security measures that will affect project operations."},
+		{"agent": support_agent, "prompt": "You can ONLY communicate through emails. Use the send_email tool to send an email to ['Village Merchant'] with subject 'Inventory Management Assistance' and offer your services to help optimize their inventory processes."}
 	]
 	
 	# Start all async operations simultaneously using ainvoke
@@ -128,6 +128,8 @@ func _test_phase_2_parallel_sending() -> bool:
 		print("ASYNC TEST: Connecting signals for agent ", i + 1, " name=", task.agent.get_agent_name())
 		task.agent.finished.connect(_on_async_email_finished.bind(completed_runs, results, agent_run_map))
 		task.agent.error.connect(_on_async_email_error.bind(completed_runs, results, agent_run_map))
+		# Connect to delta signal to show real-time responses
+		task.agent.delta.connect(_on_agent_delta.bind(task.agent.get_agent_name()))
 	
 	# Wait for all operations to complete
 	var timeout = 30.0  # 30 second timeout
@@ -153,6 +155,9 @@ func _test_phase_2_parallel_sending() -> bool:
 			all_successful = false
 			log_error("✗ Async email task failed: " + str(result.get("error", "Unknown error")))
 	
+	# Flush any remaining agent buffers
+	_flush_agent_buffers()
+	
 	if all_successful:
 		log_success("✓ Phase 2 PASSED - TRUE concurrent async email sending successful")
 		return true
@@ -168,9 +173,9 @@ func _test_phase_3_concurrent_reading() -> bool:
 	await get_tree().create_timer(1.0).timeout
 	
 	var reading_tasks = [
-		{"agent": guard_agent, "prompt": "Read your emails and summarize what you found."},
-		{"agent": coordinator_agent, "prompt": "Check your inbox and report on any urgent matters."},
-		{"agent": support_agent, "prompt": "Review your emails and identify any support requests."}
+		{"agent": guard_agent, "prompt": "You can ONLY communicate through emails. Use the read_emails tool to check your inbox for any new messages. If you find emails, respond to them using the send_email tool."},
+		{"agent": coordinator_agent, "prompt": "You can ONLY communicate through emails. Use the read_emails tool to check for any urgent matters in your inbox. If you find important emails, respond using the send_email tool."},
+		{"agent": support_agent, "prompt": "You can ONLY communicate through emails. Use the read_emails tool to check for any support requests. If you find requests, respond using the send_email tool."}
 	]
 	
 	# Start all async reading operations simultaneously using ainvoke
@@ -199,9 +204,13 @@ func _test_phase_3_concurrent_reading() -> bool:
 			task.agent.finished.disconnect(_on_async_reading_finished)
 		if task.agent.error.is_connected(_on_async_reading_error):
 			task.agent.error.disconnect(_on_async_reading_error)
+		if task.agent.delta.is_connected(_on_agent_delta):
+			task.agent.delta.disconnect(_on_agent_delta)
 		
 		task.agent.finished.connect(_on_async_reading_finished.bind(completed_runs, results, agent_run_map))
 		task.agent.error.connect(_on_async_reading_error.bind(completed_runs, results, agent_run_map))
+		# Connect to delta signal to show real-time responses
+		task.agent.delta.connect(_on_agent_delta.bind(task.agent.get_agent_name()))
 	
 	# Wait for all operations to complete
 	var timeout = 30.0  # 30 second timeout
@@ -227,6 +236,9 @@ func _test_phase_3_concurrent_reading() -> bool:
 			all_successful = false
 			log_error("✗ Async reading task failed: " + str(result.get("error", "Unknown error")))
 	
+	# Flush any remaining agent buffers
+	_flush_agent_buffers()
+	
 	if all_successful:
 		log_success("✓ Phase 3 PASSED - TRUE concurrent async email reading successful")
 		return true
@@ -239,10 +251,10 @@ func _test_phase_4_stress_test() -> bool:
 	log_phase("Phase 4: TRUE Concurrent Mixed Async Operations")
 	
 	var stress_tasks = [
-		{"type": "discover", "agent": merchant_agent, "prompt": "Use get_other_agents to see who you can email."},
-		{"type": "discover", "agent": guard_agent, "prompt": "Use get_other_agents to see who you can email."},
-		{"type": "email", "agent": coordinator_agent, "prompt": "Send a quick status update to all agents."},
-		{"type": "read", "agent": merchant_agent, "prompt": "Quickly check for any new messages."}
+		{"type": "discover", "agent": merchant_agent, "prompt": "You can ONLY communicate through emails. Use the get_other_agents tool to discover who you can email, then use send_email tool to send a message to 'Town Guard' about supply coordination."},
+		{"type": "discover", "agent": guard_agent, "prompt": "You can ONLY communicate through emails. Use the get_other_agents tool to see who you can email, then use send_email tool to send a security update to 'Project Coordinator'."},
+		{"type": "email", "agent": coordinator_agent, "prompt": "You can ONLY communicate through emails. Use the send_email tool to send a status update to ['Village Merchant', 'Town Guard', 'Support Specialist'] about project progress."},
+		{"type": "read", "agent": merchant_agent, "prompt": "You can ONLY communicate through emails. Use the read_emails tool to check for messages, then use send_email tool to respond to any you find."}
 	]
 	
 	# Start all async stress operations simultaneously using ainvoke
@@ -265,15 +277,22 @@ func _test_phase_4_stress_test() -> bool:
 	var results = []
 	
 	# Connect to completion signals for all agents (disconnect first to avoid duplicate connections)
-	for task in stress_tasks:
+	for i in range(stress_tasks.size()):
+		var task = stress_tasks[i]
+		print("STRESS TEST: Connecting signals for task ", i + 1, " type=", task.type, " agent=", task.agent.get_agent_name())
+		
 		# Disconnect any existing connections to avoid "already connected" errors
 		if task.agent.finished.is_connected(_on_async_stress_finished):
 			task.agent.finished.disconnect(_on_async_stress_finished)
 		if task.agent.error.is_connected(_on_async_stress_error):
 			task.agent.error.disconnect(_on_async_stress_error)
+		if task.agent.delta.is_connected(_on_agent_delta):
+			task.agent.delta.disconnect(_on_agent_delta)
 		
 		task.agent.finished.connect(_on_async_stress_finished.bind(completed_runs, results, agent_run_map))
 		task.agent.error.connect(_on_async_stress_error.bind(completed_runs, results, agent_run_map))
+		# Connect to delta signal to show real-time responses
+		task.agent.delta.connect(_on_agent_delta.bind(task.agent.get_agent_name()))
 	
 	# Wait for all operations to complete
 	var timeout = 30.0  # 30 second timeout
@@ -305,6 +324,9 @@ func _test_phase_4_stress_test() -> bool:
 	# Verify email system statistics
 	var total_emails = LLMEmailManager.get_total_email_count()
 	log_info("Total emails in system after stress test: " + str(total_emails))
+	
+	# Flush any remaining agent buffers
+	_flush_agent_buffers()
 	
 	if system_stable:
 		log_success("✓ Phase 4 PASSED - System stable under TRUE concurrent async load")
@@ -394,6 +416,50 @@ func _on_async_stress_error(run_id: String, error: Dictionary, completed_runs: D
 		completed_runs[run_id] = true
 		results.append({"success": false, "run_id": run_id, "task_num": task_info.task_num, "error": error})
 		log_error("✗ Async stress task " + str(task_info.task_num) + " (" + task_info.type + ") failed: " + str(error))
+
+# Real-time agent response handler with buffering for better readability
+var agent_buffers = {}
+
+func _on_agent_delta(_run_id: String, delta_text: String, agent_name: String) -> void:
+	if delta_text.length() > 0:
+		# Initialize buffer for this agent if it doesn't exist
+		if not agent_buffers.has(agent_name):
+			agent_buffers[agent_name] = ""
+		
+		# Add delta to agent's buffer
+		agent_buffers[agent_name] += delta_text
+		
+		# Check if we have a complete sentence or significant chunk
+		var buffer = agent_buffers[agent_name]
+		if buffer.ends_with(".") or buffer.ends_with("!") or buffer.ends_with("?") or buffer.ends_with(":") or buffer.length() > 50:
+			# Show the complete thought/sentence
+			var agent_color = _get_agent_color(agent_name)
+			log_info("🤖 [color=" + agent_color + "]" + agent_name + "[/color]: " + buffer.strip_edges())
+			# Clear the buffer
+			agent_buffers[agent_name] = ""
+
+# Flush any remaining text in agent buffers
+func _flush_agent_buffers() -> void:
+	for agent_name in agent_buffers.keys():
+		var buffer = agent_buffers[agent_name].strip_edges()
+		if buffer.length() > 0:
+			var agent_color = _get_agent_color(agent_name)
+			log_info("🤖 [color=" + agent_color + "]" + agent_name + "[/color]: " + buffer)
+	agent_buffers.clear()
+
+# Get consistent color for each agent
+func _get_agent_color(agent_name: String) -> String:
+	match agent_name:
+		"Village Merchant":
+			return "gold"
+		"Town Guard":
+			return "lightblue"
+		"Project Coordinator":
+			return "lightgreen"
+		"Support Specialist":
+			return "pink"
+		_:
+			return "white"
 
 ## Logging functions
 func log_test(message: String) -> void:
