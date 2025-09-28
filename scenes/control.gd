@@ -4,11 +4,15 @@ const OpenAIWrapper = preload("res://addons/godot_llm/runtime/openai_wrapper/Ope
 var LLMAgentClass: Script = load("res://addons/godot_llm/runtime/llm_agent/LLMAgent.gd")
 const LLMToolClass = preload("res://addons/godot_llm/runtime/llm_tools/LLMTool.gd")
 const MessageClass = preload("res://addons/godot_llm/runtime/llm_messages/LLMMessage.gd")
+const EmailSystemTest = preload("res://scenes/EmailSystemTest.gd")
+const AsyncEmailTest = preload("res://scenes/AsyncEmailTest.gd")
 
 # Core components
 var wrapper: OpenAIWrapper
 var agent: LLMAgent
 var demo_tools: Array = []
+var email_test: EmailSystemTest
+var async_email_test: AsyncEmailTest
 
 # UI references
 var console_output: RichTextLabel
@@ -24,6 +28,8 @@ var builder_tools_btn: Button
 var spawn_entity_btn: Button
 var calc_distance_btn: Button
 var random_color_btn: Button
+var email_test_btn: Button
+var async_email_test_btn: Button
 
 # State tracking
 var current_stream_id: String = ""
@@ -47,6 +53,9 @@ func _ready() -> void:
 	# Setup agent
 	_setup_agent()
 	
+	# Setup email test
+	_setup_email_test()
+	
 	# Connect all test buttons
 	_connect_test_buttons()
 	
@@ -65,6 +74,8 @@ func _setup_ui_references() -> void:
 	spawn_entity_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/SpawnEntityBtn"
 	calc_distance_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/CalcDistanceBtn"
 	random_color_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/RandomColorBtn"
+	email_test_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/EmailTestBtn"
+	async_email_test_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/AsyncEmailTestBtn"
 	
 	# Connect console controls
 	clear_btn.pressed.connect(func(): console_output.text = "")
@@ -195,6 +206,19 @@ func _setup_agent() -> void:
 	
 	log_success("✅ Agent configured")
 
+func _setup_email_test() -> void:
+	email_test = EmailSystemTest.new()
+	add_child(email_test)
+	email_test.test_completed.connect(_on_email_test_completed)
+	email_test.test_progress.connect(_on_email_test_progress)
+	
+	async_email_test = AsyncEmailTest.new()
+	add_child(async_email_test)
+	async_email_test.test_completed.connect(_on_async_email_test_completed)
+	async_email_test.test_progress.connect(_on_async_email_test_progress)
+	
+	log_info("Email system tests initialized")
+
 func _connect_test_buttons() -> void:
 	wrapper_call_btn.pressed.connect(_test_wrapper_call)
 	wrapper_stream_btn.pressed.connect(_test_wrapper_stream)
@@ -204,6 +228,8 @@ func _connect_test_buttons() -> void:
 	spawn_entity_btn.pressed.connect(_test_spawn_entity)
 	calc_distance_btn.pressed.connect(_test_calc_distance)
 	random_color_btn.pressed.connect(_test_random_color)
+	email_test_btn.pressed.connect(_test_email_system)
+	async_email_test_btn.pressed.connect(_test_async_email_system)
 
 # =============================================================================
 # TEST FUNCTIONS
@@ -443,3 +469,39 @@ func _load_env_key(key_name: String) -> String:
 			break
 	f.close()
 	return val
+
+# =============================================================================
+# EMAIL SYSTEM TEST
+# =============================================================================
+
+func _test_email_system() -> void:
+	log_test("📧 Starting Email System Test...")
+	if email_test != null:
+		await email_test.run_email_test(console_output)
+	else:
+		log_error("❌ Email test not initialized")
+
+func _on_email_test_completed(success: bool, message: String) -> void:
+	if success:
+		log_success("✅ " + message)
+	else:
+		log_error("❌ " + message)
+
+func _on_email_test_progress(phase: String, details: String) -> void:
+	log_info("📧 " + phase + ": " + details)
+
+func _test_async_email_system() -> void:
+	log_test("🔄 Starting Async Email System Test...")
+	if async_email_test != null:
+		await async_email_test.run_async_email_test(console_output)
+	else:
+		log_error("❌ Async email test not initialized")
+
+func _on_async_email_test_completed(success: bool, message: String) -> void:
+	if success:
+		log_success("✅ " + message)
+	else:
+		log_error("❌ " + message)
+
+func _on_async_email_test_progress(phase: String, details: String) -> void:
+	log_info("🔄 " + phase + ": " + details)

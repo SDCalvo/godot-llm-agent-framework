@@ -26,7 +26,7 @@ class_name LLMTool
 ## 	"Read messages from a board by id",
 ## 	{"type": "object", "properties": {"board_id": {"type": "string"}}, "required": ["board_id"]},
 ## 	func(args):
-## 		return {"ok": true, "data": BoardManager.read(args.board_id)}
+## 		return {"ok": true, "data": LLMEmailManager.read_emails(args.agent_id)}
 ## )
 ## ToolRegistry.register(tool)
 ## ```

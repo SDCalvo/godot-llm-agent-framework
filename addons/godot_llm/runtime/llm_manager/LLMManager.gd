@@ -80,9 +80,9 @@ func set_default_params(params: Dictionary) -> void:
         _wrapper.set_default_params(params)
 
 ## Factory to create an agent with provided tools/hyper, using the shared wrapper.
-func create_agent(hyper: Dictionary, tools: Array):
+func create_agent(hyper: Dictionary, tools: Array, agent_name: String = ""):
     var AgentClass = load("res://addons/godot_llm/runtime/llm_agent/LLMAgent.gd")
-    var agent = AgentClass.create(tools, hyper)
+    var agent = AgentClass.create(tools, hyper, agent_name)
     if _wrapper != null and agent != null and agent.has_method("set_wrapper"):
         agent.set_wrapper(_wrapper)
     return agent

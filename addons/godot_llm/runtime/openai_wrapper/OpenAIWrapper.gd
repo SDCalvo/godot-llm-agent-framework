@@ -148,7 +148,7 @@ func create_response(messages: Array, tools: Array = [], options: Dictionary = {
 	print("WRAPPER create_response start model=", model, " tools=", tools.size())
 	var res := await _request_json(HTTPClient.METHOD_POST, "/responses", body)
 	print("WRAPPER create_response done ok=", res.get("ok", false), " code=", res.get("code", -1))
-	print("WRAPPER raw json: ", JSON.stringify(res.get("json", {}), "  "))
+	# print("WRAPPER raw json: ", JSON.stringify(res.get("json", {}), "  "))  # Too verbose
 	if res.get("ok", false):
 		return _normalize_response(res.get("json", {}), res.get("code", 0))
 	return _error_result(res)
@@ -413,13 +413,10 @@ func _sse_loop_async(stream_id: String, path: String, payload: Dictionary) -> vo
 		var chunk: PackedByteArray = client.read_response_body_chunk()
 		if chunk.size() > 0:
 			var text := chunk.get_string_from_utf8()
-			print("WRAPPER continuation SSE chunk len=", text.length())
 			_process_sse_chunk(stream_id, text)
 			last_bytes_time = Time.get_ticks_msec()
 			had_any_event = true
 		loop_count += 1
-		if loop_count % 100 == 0:  # Log every 100 iterations
-			print("WRAPPER continuation: body loop iteration ", loop_count, " status=", client.get_status())
 		await get_tree().create_timer(0.03).timeout
 		if _is_cancelled(stream_id):
 			print("WRAPPER continuation: cancelled during body loop")
@@ -450,7 +447,7 @@ func _sse_loop_async(stream_id: String, path: String, payload: Dictionary) -> vo
 	return
 
 func _process_sse_chunk(stream_id: String, text: String) -> void:
-	print("WRAPPER process chunk stream=", stream_id, " text=", text)
+	# print("WRAPPER process chunk stream=", stream_id, " text=", text)  # Too verbose
 	if not _streams.has(stream_id):
 		print("WRAPPER process chunk: stream_id not found in _streams")
 		return
@@ -478,26 +475,26 @@ func _handle_sse_event(stream_id: String, block: String) -> void:
 				var has_continuation := bool(_streams[stream_id].get("continuation_pending", false))
 				print("WRAPPER [DONE] final_text_len=", final_text.length(), " continuation_pending=", has_continuation)
 				if not has_continuation:
+					print("WRAPPER emitting stream_finished signal for stream_id=", stream_id)
 					emit_signal("stream_finished", stream_id, true, final_text, {})
 					_streams.erase(stream_id)
+				else:
+					print("WRAPPER NOT emitting stream_finished - continuation pending")
 				return
 			data_lines.push_back(payload)
 	if data_lines.size() == 0:
 		return
 	var json_text := String("\n").join(data_lines)
-	print("WRAPPER SSE block json=", json_text)
 	var obj := JSON.parse_string(json_text)
 	if typeof(obj) != TYPE_DICTIONARY:
 		return
 	var event_type := String(obj.get("type", ""))
-	print("WRAPPER SSE event type=", event_type)
 	if event_type == "response.created":
 		var rid := String(obj.get("response", {}).get("id", obj.get("id", "")))
 		_streams[stream_id]["response_id"] = rid
 		emit_signal("stream_started", stream_id, rid)
 		return
 	if event_type == "response.output_text.delta":
-		print("WRAPPER handle output_text.delta obj=", JSON.stringify(obj, "  "))
 		var delta_val: Variant = obj.get("delta", {})
 		var delta_text := ""
 		if typeof(delta_val) == TYPE_DICTIONARY:
@@ -506,10 +503,8 @@ func _handle_sse_event(stream_id: String, block: String) -> void:
 			delta_text = String(delta_val)
 		_streams[stream_id]["final_text"] = String(_streams[stream_id].get("final_text", "")) + delta_text
 		emit_signal("stream_delta_text", stream_id, delta_text)
-		print("WRAPPER SSE delta len=", delta_text.length())
 		return
 	if event_type == "response.text.delta":
-		print("WRAPPER handle text.delta obj=", JSON.stringify(obj, "  "))
 		var delta_val2: Variant = obj.get("delta", {})
 		var delta_text_b := ""
 		if typeof(delta_val2) == TYPE_DICTIONARY:
@@ -518,11 +513,9 @@ func _handle_sse_event(stream_id: String, block: String) -> void:
 			delta_text_b = String(delta_val2)
 		_streams[stream_id]["final_text"] = String(_streams[stream_id].get("final_text", "")) + delta_text_b
 		emit_signal("stream_delta_text", stream_id, delta_text_b)
-		print("WRAPPER SSE delta(len)=", delta_text_b.length())
 		return
 	# Buffer function-call argument deltas
 	if event_type == "response.function_call_arguments.delta":
-		print("WRAPPER handle func_args.delta obj=", JSON.stringify(obj, "  "))
 		var item_id := String(obj.get("item_id", ""))
 		var delta_str := String(obj.get("delta", ""))
 		if item_id != "" and delta_str != "":

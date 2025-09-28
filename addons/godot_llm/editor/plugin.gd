@@ -5,18 +5,19 @@ extends EditorPlugin
 ##
 ## Registers autoload singletons on enable and removes them on disable. This
 ## ensures projects that enable the plugin get `LLMManager`, `LLMToolRegistry`, and
-## `LLMBoardManager` globally without manual setup.
+## `LLMEmailManager` globally without manual setup.
 
 const AUTOLOADS : Array[Dictionary] = [
     {"name": "LLMManager", "path": "res://addons/godot_llm/runtime/llm_manager/LLMManager.gd"},
     {"name": "LLMToolRegistry", "path": "res://addons/godot_llm/runtime/llm_tool_registry/LLMToolRegistry.gd"},
-    {"name": "LLMBoardManager", "path": "res://addons/godot_llm/runtime/llm_board_manager/LLMBoardManager.gd"},
+    {"name": "LLMEmailManager", "path": "res://addons/godot_llm/runtime/llm_email_manager/LLMEmailManager.gd"},
 ]
 
 # Legacy autoload names/paths from early versions to clean up automatically.
 const LEGACY_AUTOLOAD_NAMES := [
     "ToolRegistry",
     "BoardManager",
+    "LLMBoardManager",  # Renamed to LLMEmailManager
 ]
 
 func _enter_tree() -> void:

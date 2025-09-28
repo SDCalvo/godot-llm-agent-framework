@@ -19,7 +19,7 @@ config/icon="res://icon.svg"
 
 LLMManager="*res://addons/godot_llm/runtime/llm_manager/LLMManager.gd"
 LLMToolRegistry="*res://addons/godot_llm/runtime/llm_tool_registry/LLMToolRegistry.gd"
-LLMBoardManager="*res://addons/godot_llm/runtime/llm_board_manager/LLMBoardManager.gd"
+LLMEmailManager="*res://addons/godot_llm/runtime/llm_email_manager/LLMEmailManager.gd"
 
 [display]
 

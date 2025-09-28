@@ -56,22 +56,31 @@ var _interrupted: bool = false
 var _current_stream_id: String = ""
 var system_prompt: String = ""
 
+# Email system variables
+var _email_enabled: bool = false
+var _agent_id: String = ""  # Unique UUID
+var _agent_name: String = ""  # Display name (can be duplicate)
+
 func _ready() -> void:
 	pass
 
 ## Factory. Prefer using LLMManager.create_agent in most cases.
-static func create(tools_in: Array, hyper_in: Dictionary = {}) -> LLMAgent:
+static func create(tools_in: Array, hyper_in: Dictionary = {}, agent_name: String = "") -> LLMAgent:
 	var agent: LLMAgent = LLMAgent.new()
-	agent._init_agent(tools_in, hyper_in)
+	agent._init_agent(tools_in, hyper_in, agent_name)
 	return agent
 
-func _init_agent(tools_in: Array, hyper_in: Dictionary) -> void:
+func _init_agent(tools_in: Array, hyper_in: Dictionary, agent_name: String = "") -> void:
 	tools = tools_in if tools_in != null else []
 	hyper = hyper_in if hyper_in != null else {}
 	tools_by_name.clear()
 	for t in tools:
 		if t != null and t.name != "":
 			tools_by_name[t.name] = t
+
+	# Generate unique UUID for agent
+	_agent_id = _generate_uuid()
+	_agent_name = agent_name
 
 	# Prefer autoload global (no absolute paths). If not available, expect wrapper
 	# to be injected via set_wrapper() by the creator (e.g., LLMManager.create_agent).
@@ -282,12 +291,19 @@ func ainvoke(messages: Array) -> String:
 		if id != stream_id: return
 		acc["phase_complete"] = true
 		print("AGENT response phase completed, checking if all tools are ready for batch submission")
+		print("AGENT response completed: announced=", acc["announced"].size(), " completed=", acc["completed"].size())
+		
+		# If no tools are announced, this is the final response - clear continuation pending
+		if acc["announced"].size() == 0:
+			print("AGENT clearing continuation_pending - no tools in final response")
+			if wrapper._streams.has(id):
+				wrapper._streams[id]["continuation_pending"] = false
+		
 		_check_and_submit_batch(id, acc, run_id)
 
 	var on_delta = func(id: String, d: String):
 		if id != stream_id: return
 		emit_signal("delta", run_id, d)
-		print("AGENT delta len=", String(d).length())
 
 	var on_tool = func(id: String, call_id: String, name: String, args_delta: String):
 		if id != stream_id: return
@@ -335,6 +351,7 @@ func ainvoke(messages: Array) -> String:
 
 	var on_finished = func(id: String, ok: bool, final_text: String, usage: Dictionary):
 		if id != stream_id: return
+		print("AGENT on_finished CALLED: stream_id=", id, " run_id=", run_id, " ok=", ok, " textLen=", String(final_text).length())
 		emit_signal("finished", run_id, ok, {"ok": ok, "text": final_text, "usage": usage})
 		_disconnect_stream()
 		print("AGENT stream finished ok=", ok, " textLen=", String(final_text).length())
@@ -446,6 +463,11 @@ func _execute_tool_call(call: Dictionary) -> Dictionary:
 	var call_id := String(call.get("tool_call_id", call.get("id", "")))
 	var name := String(call.get("name", ""))
 	var args := call.get("arguments", {})
+	
+	# Set calling agent context for email tools
+	if _email_enabled and name in ["get_other_agents", "send_email", "read_emails"]:
+		LLMToolRegistry.set_calling_agent(_agent_id)
+	
 	var tool = tools_by_name.get(name, null)
 	if tool == null:
 		return {"tool_call_id": call_id, "output": JSON.stringify({"ok": false, "error": {"type": "unknown_tool", "name": name}})}
@@ -493,7 +515,9 @@ func _prepare_first_turn(messages: Array) -> Dictionary:
 				system_prompt = String(part.get("text", ""))
 				break
 	if system_prompt != "":
-		final_msgs += Message.system_simple(system_prompt)
+		# Prepare system prompt with email notifications if enabled
+		var enhanced_prompt = _prepare_system_prompt()
+		final_msgs += Message.system_simple(enhanced_prompt)
 
 	# Append the rest, skipping any system messages (we already emitted one)
 	var start_idx := 0
@@ -509,3 +533,80 @@ func _prepare_first_turn(messages: Array) -> Dictionary:
 
 # Note: Removed _submit_tool_result_deferred - immediate submission works better
 # Any delay causes race condition where original stream completes before continuation
+
+# === EMAIL SYSTEM METHODS ===
+
+## Enable email functionality for this agent
+func enable_email() -> LLMAgent:
+	_email_enabled = true
+	
+	# Register with email manager
+	var agent_info = {
+		"id": _agent_id,
+		"name": _agent_name if _agent_name != "" else "Agent_" + _agent_id.substr(0, 8),
+		"display_name": _agent_name if _agent_name != "" else "Unnamed Agent"
+	}
+	
+	if typeof(LLMEmailManager) != TYPE_NIL:
+		LLMEmailManager.register_agent(_agent_id, agent_info)
+		_register_email_tools()
+		print("Email enabled for agent: ", agent_info.name, " (ID: ", _agent_id, ")")
+	else:
+		push_error("LLMEmailManager not available - email functionality disabled")
+	
+	return self
+
+## Get agent's unique ID
+func get_agent_id() -> String:
+	return _agent_id
+
+## Get agent's display name
+func get_agent_name() -> String:
+	return _agent_name if _agent_name != "" else "Agent_" + _agent_id.substr(0, 8)
+
+## Check if email is enabled for this agent
+func is_email_enabled() -> bool:
+	return _email_enabled
+
+## Generate a simple UUID (good enough for agent IDs)
+func _generate_uuid() -> String:
+	var uuid = ""
+	var chars = "abcdef0123456789"
+	
+	# Generate a simple UUID-like string: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+	for i in range(32):
+		if i == 8 or i == 12 or i == 16 or i == 20:
+			uuid += "-"
+		uuid += chars[randi() % chars.length()]
+	
+	return uuid
+
+## Add email tools from registry to this agent's tool list
+func _register_email_tools() -> void:
+	# Get email tools from the global registry
+	var email_tool_names = ["get_other_agents", "send_email", "read_emails"]
+	
+	for tool_name in email_tool_names:
+		var tool = LLMToolRegistry.get_by_name(tool_name)
+		if tool != null:
+			tools.append(tool)
+			tools_by_name[tool_name] = tool
+		else:
+			push_error("Email tool not found in registry: " + tool_name)
+
+
+## Override system prompt preparation to include email notifications
+func _prepare_system_prompt() -> String:
+	var prompt = system_prompt
+	
+	if _email_enabled and typeof(LLMEmailManager) != TYPE_NIL:
+		var notifications = LLMEmailManager.get_agent_notifications(_agent_id)
+		if not notifications.is_empty():
+			prompt += "\n\n[NOTIFICATIONS]\n"
+			for notif in notifications:
+				prompt += "- " + notif + "\n"
+			prompt += "[/NOTIFICATIONS]"
+			# Clear notifications after adding them to prompt
+			LLMEmailManager.clear_agent_notifications(_agent_id)
+	
+	return prompt
