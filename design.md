@@ -165,18 +165,172 @@ A comprehensive LLM integration plugin for Godot 4 that provides OpenAI Response
   - Signal-based event handling
   - Resource management helpers
 
-#### 5. **Text-to-Speech & Speech-to-Text Services**
+#### 5. **Audio Services (TTS/STT)** - ✅ **Architecture Complete**
 
-- **Priority**: Medium
-- **Description**: Audio integration services for voice-enabled gameplay
-- **Features Needed**:
-  - **Standalone TTS Service**: Convert text to speech independently of agents
-  - **Standalone STT Service**: Convert speech to text for any game system
-  - **Agent Integration**: Seamless voice input/output for LLM agents
-  - **Multiple Providers**: Support for various TTS/STT APIs (OpenAI, Google, Azure, etc.)
-  - **Voice Customization**: Different voices for different agents/characters
-  - **Audio Streaming**: Real-time audio processing and playback
-  - **Language Support**: Multi-language TTS/STT capabilities
+- **Priority**: High (Implementation In Progress)
+- **Description**: Pure component-based audio processing services
+- **Status**: ✅ **Design Complete, Implementation 80% Done**
+
+**🎯 Core Design Principles:**
+
+- **Pure Data Processors**: Components transform data streams without handling I/O devices
+- **User Controls Audio I/O**: Users handle microphone/speaker devices however they want
+- **Modular Pipeline**: Each component does one thing, connects via signals
+- **Agent Unchanged**: Existing LLMAgent works perfectly as-is
+
+**🔗 Component Pipeline:**
+
+```
+Audio Stream → OpenAI STT → Complete Text → LLM Agent → Text Stream → ElevenLabs TTS → Audio Stream
+```
+
+**📋 Implemented Components:**
+
+1. **OpenAI STT Service** (`OpenAISTT`) - ✅ **Complete**
+   - Uses OpenAI Realtime API with WebSocket streaming
+   - Built-in VAD (Voice Activity Detection) with configurable thresholds
+   - Provides both streaming deltas and complete transcriptions
+   - Supports multiple models: `gpt-4o-transcribe`, `whisper-1`, `gpt-4o-mini-transcribe`
+   - Noise reduction (near-field/far-field)
+   - Language hints and custom prompts
+2. **ElevenLabs TTS Service** (`ElevenLabsWrapper`) - 🔧 **Needs Streaming Implementation**
+   - Framework complete, needs streaming synthesis implementation
+   - Voice selection and voice settings configuration
+   - Audio chunk streaming for real-time playback
+3. **Audio Manager** - ❌ **Removed by Design**
+   - Decided against centralized audio I/O management
+   - Users handle their own microphone/speaker integration
+   - Keeps services pure and flexible
+
+**🎤 STT Usage Pattern:**
+
+```gdscript
+# User provides audio from any source
+func _on_user_audio(audio: PackedByteArray):
+    OpenAISTT.send_audio_chunk(audio, session_id)
+
+# STT provides complete text when speech ends (VAD detection)
+OpenAISTT.transcription_completed.connect(func(text, session_id):
+    agent.ainvoke(Message.user_simple(text)))  # Send complete utterance to agent
+```
+
+**🔊 TTS Usage Pattern:**
+
+```gdscript
+# Agent streams response text
+agent.delta.connect(func(run_id, text_delta):
+    ElevenLabsWrapper.synthesize_text(text_delta))  # Stream to TTS as agent generates
+
+# TTS streams audio back
+ElevenLabsWrapper.audio_chunk_ready.connect(func(audio, stream_id):
+    user_speaker.play(audio))  # User handles audio output
+```
+
+**⚙️ Voice Activity Detection (VAD):**
+
+- OpenAI Realtime API provides sophisticated server-side VAD
+- Eliminates need for custom VAD implementation
+- Configurable sensitivity, padding, and silence detection
+- Signals: `speech_started`, `speech_stopped`, `transcription_completed`
+- VAD solves the "when to invoke agent" problem automatically
+
+**🔑 API Key Management:**
+
+- Environment variables: `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`
+- Fallback to `.env` file support
+- Consistent initialization pattern across all services
+- Graceful degradation with warnings if keys missing
+
+**🎯 Benefits:**
+
+- **Maximum Flexibility**: Users wire audio I/O however they want
+- **Component Reusability**: Services work in any combination
+- **Game-Friendly**: Perfect for NPCs, UI, multiplayer scenarios
+- **Platform Agnostic**: Works on mobile, desktop, web
+- **Zero Agent Changes**: Existing LLMAgent works perfectly
+- **Testing-Friendly**: Easy to test with mock audio data
+
+**✅ What We Have (Implemented & Working):**
+
+1. **Complete OpenAI STT Service**
+
+   - ✅ WebSocket connection to OpenAI Realtime API
+   - ✅ Built-in VAD with configurable thresholds, padding, silence detection
+   - ✅ Multi-model support (gpt-4o-transcribe, whisper-1, gpt-4o-mini-transcribe)
+   - ✅ Streaming transcription deltas + complete text on speech end
+   - ✅ Noise reduction (near-field/far-field)
+   - ✅ Language hints and custom prompts
+   - ✅ Session management for concurrent transcriptions
+   - ✅ Error handling and connection state management
+   - ✅ Signal-based architecture (speech_started, speech_stopped, transcription_delta, transcription_completed)
+
+2. **ElevenLabs TTS Framework**
+
+   - ✅ API key initialization and configuration
+   - ✅ Voice settings (stability, clarity, style, speaker boost)
+   - ✅ Basic synthesis structure
+   - ✅ Signal definitions (audio_chunk_ready, synthesis_started, synthesis_completed)
+   - ✅ HTTPClient integration framework
+
+3. **Plugin Integration**
+
+   - ✅ Audio services registered as autoloads (OpenAISTT, ElevenLabsWrapper)
+   - ✅ API key management (OPENAI_API_KEY, ELEVENLABS_API_KEY)
+   - ✅ Environment variable + .env file support
+   - ✅ Initialization in control script with graceful degradation
+   - ✅ Legacy autoload cleanup for smooth upgrades
+
+4. **Architecture Decisions**
+   - ✅ Pure component design (no device management)
+   - ✅ Signal-based pipeline connections
+   - ✅ VAD-driven text accumulation strategy
+   - ✅ Agent integration via complete utterances
+   - ✅ User-controlled audio I/O
+
+**🔧 What We're Missing (To Complete):**
+
+1. **ElevenLabs TTS Streaming Implementation**
+
+   - ❌ Real HTTP streaming synthesis to ElevenLabs API
+   - ❌ Audio chunk streaming and base64 decoding
+   - ❌ Voice list fetching from ElevenLabs API
+   - ❌ Streaming synthesis with real-time audio output
+   - ❌ Error handling for TTS API failures
+   - ❌ Connection management and retry logic
+
+2. **Testing & Validation**
+
+   - ❌ End-to-end voice pipeline test
+   - ❌ Audio format validation (ensure 16kHz PCM compatibility)
+   - ❌ Real API connectivity tests with both services
+   - ❌ VAD accuracy testing with different speech patterns
+   - ❌ Latency measurement and optimization
+
+3. **Documentation & Examples**
+   - ❌ Usage examples showing complete voice pipelines
+   - ❌ Multi-agent voice scenarios (different voices per agent)
+   - ❌ Integration guides for common game scenarios
+   - ❌ Audio format requirements and recommendations
+   - ❌ Performance optimization guidelines
+
+**🎯 Implementation Priority (Next Steps):**
+
+1. **🔊 Complete ElevenLabs TTS Streaming** (High Priority)
+
+   - Implement real API calls with audio streaming
+   - Add voice management and selection
+   - Handle audio format conversion and streaming
+
+2. **🧪 Create Voice Pipeline Test** (Medium Priority)
+
+   - End-to-end test: microphone → STT → agent → TTS → speakers
+   - Validate component integration and signal flow
+   - Test with real API keys and audio hardware
+
+3. **📖 Add Usage Examples** (Low Priority)
+   - Document common voice pipeline patterns
+   - Show multi-agent voice setups
+   - Provide troubleshooting guides
 
 #### 6. **Developer Experience**
 

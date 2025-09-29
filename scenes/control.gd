@@ -53,6 +53,9 @@ func _ready() -> void:
 	# Setup agent
 	_setup_agent()
 	
+	# Setup audio services
+	_setup_audio_services()
+	
 	# Setup email test
 	_setup_email_test()
 	
@@ -205,6 +208,37 @@ func _setup_agent() -> void:
 				log_error("❌ Agent error: " + JSON.stringify(err)))
 	
 	log_success("✅ Agent configured")
+
+func _setup_audio_services() -> void:
+	log_info("🎤 Setting up audio services...")
+	
+	# Setup OpenAI STT
+	var openai_key := OS.get_environment("OPENAI_API_KEY")
+	if openai_key == "":
+		openai_key = _load_env_key("OPENAI_API_KEY")
+	
+	if openai_key != "":
+		OpenAISTT.initialize(openai_key)
+		log_success("✅ OpenAI STT configured")
+	else:
+		log_warning("⚠️ OpenAI STT not configured - missing OPENAI_API_KEY")
+	
+	# Setup ElevenLabs TTS
+	var elevenlabs_key := OS.get_environment("ELEVENLABS_API_KEY")
+	if elevenlabs_key == "":
+		elevenlabs_key = _load_env_key("ELEVENLABS_API_KEY")
+	
+	if elevenlabs_key != "":
+		ElevenLabsWrapper.initialize(elevenlabs_key)
+		log_success("✅ ElevenLabs TTS configured")
+	else:
+		log_warning("⚠️ ElevenLabs TTS not configured - missing ELEVENLABS_API_KEY")
+	
+	# Setup Audio Manager
+	# AudioManager doesn't need API keys - it handles local audio I/O
+	log_success("✅ AudioManager ready")
+	
+	log_success("✅ Audio services initialized")
 
 func _setup_email_test() -> void:
 	email_test = EmailSystemTest.new()
