@@ -41,8 +41,8 @@ signal character_context_destroyed(context_id: String)
 const PCM_SAMPLE_RATE: int = 16000
 
 ## Recommended buffer length for real-time playback
-## 1.0 second = 16000 frames (enough for largest ElevenLabs chunks which can be ~10000 frames)
-const PCM_BUFFER_LENGTH: float = 1.0
+## 4.0 seconds = 64000 frames (large buffer for smooth prebuffered playback)
+const PCM_BUFFER_LENGTH: float = 4.0
 
 ## ElevenLabs API configuration
 var api_key: String = ""
@@ -56,6 +56,12 @@ enum StreamingMode {
 	REAL_TIME    ## Play chunks as they arrive (lowest latency, requires PCM format)
 }
 var streaming_mode: StreamingMode = StreamingMode.BUFFERED  ## Default to buffered mode
+
+## Text batching configuration (for smoother, more natural speech)
+var enable_text_batching: bool = true  ## Automatically batch text chunks for natural phrasing
+var text_batch_min_chars: int = 20     ## Minimum characters before considering flush
+var text_batch_max_chars: int = 50     ## Maximum characters before forced flush
+var text_batch_timeout_ms: int = 500   ## Max time to wait before flushing medium-sized buffer
 
 ## Voice settings (applied to all contexts)
 var voice_stability: float = 0.5
@@ -131,7 +137,10 @@ func create_character_context(context_id: String, voice_id: String = "") -> bool
 		"is_speaking": false,
 		"last_activity": Time.get_ticks_msec(),  # Track last message sent
 		"next_keepalive_interval": KEEPALIVE_INITIAL_INTERVAL,  # Rubberband: current interval
-		"time_since_last_keepalive": 0.0  # Accumulated time for next keepalive
+		"time_since_last_keepalive": 0.0,  # Accumulated time for next keepalive
+		# Text batching state
+		"batch_buffer": "",  # Accumulated text for batching
+		"batch_last_flush": Time.get_ticks_msec()  # Last time we flushed batch
 	}
 	
 	# Connect to WebSocket for this voice
@@ -170,20 +179,63 @@ func speak_as_character(context_id: String, text: String) -> bool:
 	return true
 
 ## Send text chunk to character (for streaming text input)
-func feed_text_to_character(context_id: String, text_chunk: String) -> bool:
-	print("[ElevenLabs] >>> feed_text_to_character('%s', '%s')" % [context_id, text_chunk])
+## @param flush_immediately: If true, forces immediate audio generation (use for final chunk)
+func feed_text_to_character(context_id: String, text_chunk: String, flush_immediately: bool = false) -> bool:
+	print("[ElevenLabs] >>> feed_text_to_character('%s', '%s', flush=%s)" % [context_id, text_chunk, flush_immediately])
 	
 	if not character_contexts.has(context_id):
 		print("[ElevenLabs] ⚠️ Context '%s' not found!" % context_id)
 		push_warning("Character context not found: " + context_id)
 		return false
 	
-	# Send text chunk immediately for real-time synthesis
-	print("[ElevenLabs] 📤 Sending chunk to '%s'..." % context_id)
-	_send_text_to_context(context_id, text_chunk)
+	var context = character_contexts[context_id]
+	
+	# Python SDK approach: Smart batching for REAL_TIME (text_chunker logic)
+	# Accumulate text and send on sentence boundaries (punctuation)
+	if streaming_mode == StreamingMode.REAL_TIME:
+		# Accumulate text in buffer
+		context["batch_buffer"] += text_chunk
+		
+		# Check if we should send (sentence boundary or flush requested)
+		var should_send = flush_immediately
+		var splitters = [".", ",", "?", "!", ";", ":", " "]
+		
+		if not should_send:
+			# Check if buffer ends with punctuation
+			for splitter in splitters:
+				if context["batch_buffer"].ends_with(splitter):
+					should_send = true
+					break
+		
+		if should_send and context["batch_buffer"].length() > 0:
+			var text_to_send = context["batch_buffer"]
+			# Ensure it ends with space (Python SDK does this)
+			if not text_to_send.ends_with(" "):
+				text_to_send += " "
+			print("[ElevenLabs] 📤 [REAL_TIME] Sending batched text: '%s'" % text_to_send)
+			_send_text_to_context(context_id, text_to_send, flush_immediately)
+			context["batch_buffer"] = ""
+		else:
+			print("[ElevenLabs] 🔄 [REAL_TIME] Buffering: '%s' (%d chars)" % [text_chunk, context["batch_buffer"].length()])
+	elif enable_text_batching and not flush_immediately:
+		# BUFFERED: Accumulate text for smoother MP3 generation
+		context["batch_buffer"] += text_chunk
+		var buffer_len = context["batch_buffer"].length()
+		print("[ElevenLabs] 🔄 [BUFFERED] Buffering text (%d chars)..." % buffer_len)
+	else:
+		# BUFFERED final flush or batching disabled
+		if flush_immediately and enable_text_batching and context["batch_buffer"].length() > 0:
+			print("[ElevenLabs] 📦 Final batch flush: '%s'" % context["batch_buffer"])
+			_send_text_to_context(context_id, context["batch_buffer"] + text_chunk, true)
+			context["batch_buffer"] = ""
+		else:
+			print("[ElevenLabs] 📤 Sending chunk to '%s'..." % context_id)
+			_send_text_to_context(context_id, text_chunk, flush_immediately)
+	
 	return true
 
 ## Finish speaking for a character (end the current speech)
+## Python SDK: After sending {"text":""}, keep receiving until connection closes
 func finish_character_speech(context_id: String) -> bool:
 	print("[ElevenLabs] >>> finish_character_speech('%s')" % context_id)
 	
@@ -194,6 +246,31 @@ func finish_character_speech(context_id: String) -> bool:
 	# Send end-of-input signal to WebSocket
 	print("[ElevenLabs] 🏁 Finishing speech for '%s'..." % context_id)
 	_send_end_of_input(context_id)
+	
+	# Python SDK: DRAIN remaining messages after sending close signal
+	# Keep polling until connection closes or we timeout
+	var context = character_contexts[context_id]
+	var ws = context["websocket"]
+	var max_drain_time = 2.0  # 2 seconds max to drain
+	var drain_start = Time.get_ticks_msec()
+	
+	print("[ElevenLabs] 🚰 Draining final messages for '%s'..." % context_id)
+	while ws and ws.get_ready_state() == WebSocketPeer.STATE_OPEN:
+		ws.poll()
+		
+		# Process any remaining packets
+		while ws.get_available_packet_count() > 0:
+			var packet = ws.get_packet()
+			_handle_websocket_message(context_id, packet)
+		
+		# Timeout check
+		if (Time.get_ticks_msec() - drain_start) / 1000.0 > max_drain_time:
+			print("[ElevenLabs] ⏱️ Drain timeout for '%s' after 2s" % context_id)
+			break
+		
+		await Engine.get_main_loop().process_frame
+	
+	print("[ElevenLabs] ✅ Drain complete for '%s'" % context_id)
 	return true
 
 ## Destroy a character context
@@ -224,6 +301,19 @@ func set_voice_settings(stability: float, similarity_boost: float, style: float 
 ## Set the default voice ID
 func set_default_voice(voice_id: String) -> void:
 	default_voice_id = voice_id
+
+## Configure text batching behavior
+## @param enabled: Enable/disable automatic text batching
+## @param min_chars: Minimum characters before considering flush (default: 20)
+## @param max_chars: Maximum characters before forced flush (default: 50)
+## @param timeout_ms: Max time to wait before flushing (default: 500ms)
+func set_text_batching(enabled: bool, min_chars: int = 20, max_chars: int = 50, timeout_ms: int = 500) -> void:
+	enable_text_batching = enabled
+	text_batch_min_chars = min_chars
+	text_batch_max_chars = max_chars
+	text_batch_timeout_ms = timeout_ms
+	var status = "enabled" if enabled else "disabled"
+	print("ElevenLabs: Text batching %s (min:%d, max:%d, timeout:%dms)" % [status, min_chars, max_chars, timeout_ms])
 
 ## Check if the wrapper is properly initialized
 func is_initialized() -> bool:
@@ -336,6 +426,7 @@ func _send_initial_config(context_id: String) -> void:
 	# This initializes the connection with voice settings and API key
 	var config_message = {
 		"text": " ",  # REQUIRED: Initial text must be a blank space
+		"try_trigger_generation": true,  # Python SDK uses this in handshake!
 		"voice_settings": {
 			"stability": voice_stability,
 			"similarity_boost": voice_similarity_boost
@@ -343,8 +434,11 @@ func _send_initial_config(context_id: String) -> void:
 		"xi_api_key": api_key  # API key for authentication
 	}
 	
-	# No custom config needed for REAL_TIME mode
-	# The flush:true parameter in each message is sufficient for immediate generation
+	# For REAL_TIME mode: use minimal chunk schedule for low latency (Python SDK uses [50])
+	if streaming_mode == StreamingMode.REAL_TIME:
+		config_message["generation_config"] = {
+			"chunk_length_schedule": [50]  # Much smaller than default [120,160,250,290]
+		}
 	
 	var json_string = JSON.stringify(config_message)
 	print("ElevenLabs: Sending initial handshake: ", json_string)
@@ -352,7 +446,8 @@ func _send_initial_config(context_id: String) -> void:
 	print("ElevenLabs: Sent initial handshake for context ", context_id)
 
 ## Send text to specific character context
-func _send_text_to_context(context_id: String, text: String) -> void:
+## Python SDK NEVER uses flush:true - only try_trigger_generation:true
+func _send_text_to_context(context_id: String, text: String, force_flush: bool = false) -> void:
 	print("[ElevenLabs] >>> _send_text_to_context('%s', '%s')\" % [context_id, text.substr(0, 30) + (\"...\" if text.length() > 30 else \"\")])")
 	var context = character_contexts[context_id]
 	var ws = context["websocket"]
@@ -362,19 +457,11 @@ func _send_text_to_context(context_id: String, text: String) -> void:
 		push_error("Context not connected: " + context_id)
 		return
 	
-	# Build text message based on streaming mode
+	# Build text message - Python SDK ALWAYS uses try_trigger_generation
 	var text_message = {
-		"text": text
+		"text": text,
+		"try_trigger_generation": true  # Always true, as per Python SDK
 	}
-	
-	# REAL_TIME mode: Use flush to force immediate generation for each chunk
-	# BUFFERED mode: Let the buffer system work naturally for smooth audio
-	if streaming_mode == StreamingMode.REAL_TIME:
-		text_message["flush"] = true  # Force immediate generation for low latency
-		print("[ElevenLabs] 🚀 Real-time mode: Using flush=true for immediate generation")
-	else:
-		text_message["try_trigger_generation"] = true  # Normal buffered generation
-		print("[ElevenLabs] 📦 Buffered mode: Using try_trigger_generation for smooth audio")
 	
 	var json_string = JSON.stringify(text_message)
 	print("[ElevenLabs] 📤 Sending text message to '%s': %s" % [context_id, json_string])
@@ -464,17 +551,37 @@ func _handle_websocket_message(context_id: String, packet: PackedByteArray) -> v
 	# Check if this is JSON (text) or binary (audio) data
 	var packet_string = packet.get_string_from_utf8()
 	
+	print("[ElevenLabs] 🔍 RAW MESSAGE for '%s': size=%d bytes, starts_with_brace=%s" % [
+		context_id, 
+		packet.size(), 
+		packet_string.begins_with("{")
+	])
+	
 	if packet_string.begins_with("{"):
-		# JSON message (don't print full packet to avoid console overflow)
+		# JSON message
 		print("[ElevenLabs] 📨 Received JSON for context '%s' (%d bytes)" % [context_id, packet.size()])
+		print("[ElevenLabs] 📄 JSON CONTENT: %s" % packet_string.substr(0, 500))  # First 500 chars
+		
 		var json = JSON.new()
 		var parse_result = json.parse(packet_string)
 		
 		if parse_result == OK:
 			var message = json.data
-			# Log message structure for debugging
 			var keys = message.keys() if message is Dictionary else []
 			print("[ElevenLabs] 📋 JSON keys: %s" % str(keys))
+			
+			# Log key fields
+			if message.has("isFinal"):
+				print("[ElevenLabs] 🏁 isFinal: %s" % str(message["isFinal"]))
+			if message.has("audio"):
+				var audio_val = message["audio"]
+				if audio_val == null:
+					print("[ElevenLabs] 🔇 audio: NULL")
+				elif audio_val == "":
+					print("[ElevenLabs] 🔇 audio: EMPTY STRING")
+				else:
+					print("[ElevenLabs] 🎵 audio: base64 string (%d chars)" % str(audio_val).length())
+			
 			_handle_json_message(context_id, message)
 		else:
 			print("[ElevenLabs] ❌ Failed to parse JSON message for context '%s'" % context_id)
@@ -485,20 +592,29 @@ func _handle_websocket_message(context_id: String, packet: PackedByteArray) -> v
 
 ## Handle JSON message from WebSocket
 func _handle_json_message(context_id: String, message: Dictionary) -> void:
+	print("[ElevenLabs] 🔧 _handle_json_message called for '%s'" % context_id)
+	
 	# Check for authentication success
 	if message.has("message") and message["message"] == "Authentication successful":
 		print("[ElevenLabs] ✅ Authentication successful for '%s'" % context_id)
 		return
 	
 	if message.has("audio") and message["audio"] != null and message["audio"] != "":
+		print("[ElevenLabs] 🎵 Audio field present and non-empty")
 		# Audio data in base64 (MP3) or raw bytes (PCM)
 		var audio_base64 = message["audio"]
 		if typeof(audio_base64) == TYPE_STRING and audio_base64.length() > 0:
+			print("[ElevenLabs] 🔓 Decoding base64 audio (%d chars)..." % audio_base64.length())
 			# Decode base64 to raw bytes
 			var audio_bytes = Marshalls.base64_to_raw(audio_base64)
 			var format = "MP3" if streaming_mode == StreamingMode.BUFFERED else "PCM"
 			print("[ElevenLabs] 🎵 Audio chunk received for '%s': %d bytes (%s)" % [context_id, audio_bytes.size(), format])
+			print("[ElevenLabs] 📤 Calling _handle_audio_data...")
 			_handle_audio_data(context_id, audio_bytes)
+		else:
+			print("[ElevenLabs] ⚠️ Audio field is not a valid string or is empty")
+	else:
+		print("[ElevenLabs] 🔇 No audio in this message (audio=%s)" % str(message.get("audio", "NOT_PRESENT")))
 	
 	if message.has("isFinal") and message["isFinal"]:
 		# Speech generation completed
@@ -539,7 +655,7 @@ func _handle_json_message(context_id: String, message: Dictionary) -> void:
 	
 	# Log unknown messages for debugging
 	if not message.has("audio") and not message.has("isFinal") and not message.has("error") and not (message.has("message") and message["message"] == "Authentication successful"):
-		print("ElevenLabs: Unknown message for context ", context_id, ": ", message)
+		print("ElevenLabs: ⚠️ Unknown message for context ", context_id, ": ", message)
 
 ## Handle binary audio data
 func _handle_audio_data(context_id: String, audio_data: PackedByteArray) -> void:
@@ -630,3 +746,212 @@ static func convert_pcm_to_frames(playback: AudioStreamGeneratorPlayback, pcm_da
 		
 		# Push stereo frame (mono source, duplicate to both channels)
 		playback.push_frame(Vector2(sample_float, sample_float))
+
+
+## ========== HELPER: REAL-TIME PCM PLAYER ==========
+
+## Helper class to manage real-time PCM playback with automatic queue management.
+## 
+## This handles all the complexity of:
+##   - AudioStreamGenerator setup
+##   - Queue management for smooth playback
+##   - Timer-based queue processing
+##   - Automatic cleanup
+##
+## Usage:
+##   var player = ElevenLabsWrapper.create_realtime_player(parent_node, context_id)
+##   # Player auto-connects to audio_chunk_ready signal
+##   # Auto-plays and manages everything!
+##   
+##   # When done:
+##   player.cleanup()
+##
+class RealtimePCMPlayer extends Node:
+	var context_id: String
+	var audio_player: AudioStreamPlayer
+	var playback: AudioStreamGeneratorPlayback
+	var audio_queue: Array[PackedByteArray] = []
+	var queue_timer: Timer
+	var wrapper_ref  # Reference to ElevenLabsWrapper (for signals)
+	var prebuffer_threshold: int = 1  # Start playback immediately when first chunk arrives (handles both single and multi-chunk responses)
+	var is_prebuffered: bool = false  # Track if we've started playing
+	var synthesis_complete: bool = false  # Track if synthesis is done (to handle 1-chunk cases)
+	
+	func _init(ctx_id: String, parent: Node, wrapper):
+		context_id = ctx_id
+		wrapper_ref = wrapper
+		name = "RealtimePCMPlayer_" + context_id
+		
+		# Create AudioStreamPlayer with generator
+		audio_player = AudioStreamPlayer.new()
+		audio_player.name = "Player_" + context_id
+		var generator = AudioStreamGenerator.new()
+		generator.mix_rate = PCM_SAMPLE_RATE
+		generator.buffer_length = PCM_BUFFER_LENGTH
+		audio_player.stream = generator
+		add_child(audio_player)
+		
+		# Create timer for queue processing
+		queue_timer = Timer.new()
+		queue_timer.name = "QueueTimer_" + context_id
+		queue_timer.wait_time = 0.001  # 1ms
+		queue_timer.one_shot = false
+		queue_timer.timeout.connect(_process_queue)
+		add_child(queue_timer)
+		
+		# Add to parent FIRST (must be in tree before play/start)
+		parent.add_child(self)
+	
+	## Call after node is in tree to start playback
+	func initialize_playback() -> bool:
+		# Now that we're in the tree, start playback and timer
+		audio_player.play()
+		queue_timer.start()
+		
+		# Get playback stream
+		playback = audio_player.get_stream_playback()
+		if not playback:
+			push_error("ElevenLabs RealtimePCMPlayer: Failed to get playback")
+			return false
+		
+		# Connect to wrapper's audio and synthesis signals
+		wrapper_ref.audio_chunk_ready.connect(_on_audio_chunk)
+		wrapper_ref.synthesis_completed.connect(_on_synthesis_complete)
+		return true
+	
+	func _on_synthesis_complete(ctx_id: String):
+		print("[RealtimePCMPlayer] 🏁 Synthesis complete signal received for '%s' (my context: '%s')" % [ctx_id, context_id])
+		
+		if ctx_id != context_id:
+			print("[RealtimePCMPlayer] ❌ Context mismatch - ignoring")
+			return
+		
+		synthesis_complete = true
+		print("[RealtimePCMPlayer] 📊 State: is_prebuffered=%s, queue_size=%d" % [is_prebuffered, audio_queue.size()])
+		
+		# If synthesis is done and we have chunks but haven't started playing, start now!
+		if not is_prebuffered and not audio_queue.is_empty():
+			print("[RealtimePCMPlayer] 🎬 Synthesis complete with %d chunk(s) - starting playback immediately!" % audio_queue.size())
+			is_prebuffered = true
+		elif is_prebuffered:
+			print("[RealtimePCMPlayer] ✅ Already playing, continuing...")
+		else:
+			print("[RealtimePCMPlayer] ⚠️ No chunks to play!")
+	
+	func _on_audio_chunk(audio: PackedByteArray, ctx_id: String):
+		if ctx_id != context_id:
+			return
+		
+		print("[RealtimePCMPlayer] 📥 Chunk received for '%s' (%d bytes), queue size: %d -> %d" % [context_id, audio.size(), audio_queue.size(), audio_queue.size() + 1])
+		
+		# Always queue chunks (for prebuffering strategy)
+		audio_queue.append(audio)
+		
+		# Check if this is the LAST chunk (isFinal already received)
+		# This happens when synthesis completes quickly with only 1-2 chunks
+		if not is_prebuffered and synthesis_complete:
+			print("[RealtimePCMPlayer] 🎬 Last chunk received (synthesis already complete) - starting playback immediately!")
+			is_prebuffered = true
+			return
+		
+		# Start playback once we have enough chunks prebuffered
+		if not is_prebuffered and audio_queue.size() >= prebuffer_threshold:
+			print("[RealtimePCMPlayer] 🎬 Prebuffer threshold reached (%d chunks) - starting playback!" % prebuffer_threshold)
+			is_prebuffered = true
+		elif not is_prebuffered:
+			print("[RealtimePCMPlayer] ⏳ Waiting for more chunks... (%d/%d)" % [audio_queue.size(), prebuffer_threshold])
+	
+	func _process_queue():
+		# Don't process until we've reached prebuffer threshold
+		if not is_prebuffered:
+			if not audio_queue.is_empty():
+				print("[RealtimePCMPlayer] ⏸️ Queue has %d chunks but not prebuffered yet" % audio_queue.size())
+			return
+		
+		if audio_queue.is_empty():
+			return
+		
+		var chunks_processed = 0
+		while not audio_queue.is_empty():
+			var next_chunk = audio_queue[0]
+			var frames_needed = int(next_chunk.size() / 2.0)
+			var frames_available = playback.get_frames_available()
+			
+			if frames_available >= frames_needed:
+				var chunk = audio_queue.pop_front()
+				ElevenLabsWrapper.convert_pcm_to_frames(playback, chunk)
+				chunks_processed += 1
+			else:
+				# Only log if queue is stuck (not just waiting for buffer space)
+				if chunks_processed == 0 and audio_queue.size() > 5:
+					print("[RealtimePCMPlayer] ⚠️ Buffer full: need %d, have %d (queue: %d)" % [frames_needed, frames_available, audio_queue.size()])
+				break
+		
+		if chunks_processed > 0:
+			print("[RealtimePCMPlayer] ✅ Processed %d chunk(s), %d remaining" % [chunks_processed, audio_queue.size()])
+	
+	func get_queue_size() -> int:
+		return audio_queue.size()
+	
+	func is_queue_empty() -> bool:
+		return audio_queue.is_empty()
+	
+	func cleanup():
+		if wrapper_ref:
+			if wrapper_ref.audio_chunk_ready.is_connected(_on_audio_chunk):
+				wrapper_ref.audio_chunk_ready.disconnect(_on_audio_chunk)
+			if wrapper_ref.synthesis_completed.is_connected(_on_synthesis_complete):
+				wrapper_ref.synthesis_completed.disconnect(_on_synthesis_complete)
+		queue_timer.stop()
+		queue_free()
+
+
+## Factory method to create a real-time PCM player for a context.
+## 
+## This is the EASIEST way to play real-time PCM audio:
+##   1. Creates and configures AudioStreamPlayer
+##   2. Sets up queue management
+##   3. Auto-connects to audio_chunk_ready signal
+##   4. Returns a player you can query/cleanup
+##
+## Usage (from instance method):
+##   var player = await create_realtime_player(self, "my_context")
+##   # Audio plays automatically as chunks arrive!
+##
+## Usage (from static context):
+##   var wrapper = get_node("/root/ElevenLabsWrapper")  # Cache this!
+##   var player = await ElevenLabsWrapper.create_realtime_player_with_wrapper(
+##       self, "my_context", wrapper
+##   )
+##   
+##   # Check queue status:
+##   if player.is_queue_empty():
+##       print("All audio played!")
+##   
+##   # Cleanup when done:
+##   player.cleanup()
+##
+## @param parent_node: Node to attach the player to (usually 'self' in your script)
+## @param context_id: The character context ID to play audio for
+## @param wrapper_instance: Optional wrapper instance (defaults to autoload lookup)
+## @return RealtimePCMPlayer instance (ready to use)
+static func create_realtime_player(parent_node: Node, context_id: String, wrapper_instance = null) -> RealtimePCMPlayer:
+	var wrapper = wrapper_instance
+	
+	# If no wrapper provided, look it up (less efficient, but convenient)
+	if not wrapper:
+		wrapper = parent_node.get_node_or_null("/root/ElevenLabsWrapper")
+		if not wrapper:
+			push_error("ElevenLabs: ElevenLabsWrapper autoload not found (check Project Settings > Autoload)")
+			return null
+	
+	var player = RealtimePCMPlayer.new(context_id, parent_node, wrapper)
+	
+	# Wait for player to be in tree and playback to be ready
+	await parent_node.get_tree().process_frame
+	
+	if not player.initialize_playback():
+		player.queue_free()
+		return null
+	
+	return player

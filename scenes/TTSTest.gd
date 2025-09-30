@@ -16,10 +16,6 @@ var console_output: RichTextLabel
 ## Test state (minimal - each test manages its own resources)
 var test_results: Dictionary = {}
 
-func _ready() -> void:
-	# No global setup needed - each test manages its own resources!
-	pass
-
 ## Main test entry point - runs 3 isolated test scenarios
 func run_tts_test(output_console: RichTextLabel) -> void:
 	console_output = output_console
@@ -213,94 +209,21 @@ func _test_streaming_realtime() -> void:
 		_record_test_result("streaming_realtime", false, "Failed to create context")
 		return
 	
-	# Create AudioStreamGenerator for real-time playback
-	var player = AudioStreamPlayer.new()
-	add_child(player)
-	var generator = AudioStreamGenerator.new()
-	generator.mix_rate = ElevenLabsWrapper.PCM_SAMPLE_RATE
-	generator.buffer_length = 2.0  # 2 seconds = 32000 frames (plenty of headroom!)
-	player.stream = generator
-	player.play()
-	
-	await get_tree().process_frame  # Wait for generator to initialize
-	
-	var playback: AudioStreamGeneratorPlayback = player.get_stream_playback()
-	if not playback:
-		log_error("❌ Failed to get AudioStreamGeneratorPlayback")
-		_record_test_result("streaming_realtime", false, "Failed to setup playback")
-		player.queue_free()
+	# ✨ NEW: Simple one-line player creation using helper!
+	var player = await ElevenLabsWrapperScript.create_realtime_player(self, context_id)
+	if not player:
+		log_error("❌ Failed to create real-time player")
+		_record_test_result("streaming_realtime", false, "Failed to create player")
 		return
 	
-	var state = {"audio_received": false, "synthesis_complete": false, "llm_complete": false}
+	log_success("✅ Real-time player created and ready!")
 	
-	# Create a DEDICATED Node for queue processing (survives hot-reloads!)
-	var queue_processor_node = Node.new()
-	queue_processor_node.name = "AudioQueueProcessor"
-	add_child(queue_processor_node)
+	var state = {"audio_received": false, "synthesis_complete": false}
 	
-	# Add script to the node
-	var queue_script = GDScript.new()
-	queue_script.source_code = """
-extends Node
-
-var audio_queue: Array[PackedByteArray] = []
-var playback: AudioStreamGeneratorPlayback
-var wrapper_script
-var log_callback: Callable
-
-func add_chunk(chunk: PackedByteArray) -> void:
-	audio_queue.append(chunk)
-
-func queue_size() -> int:
-	return audio_queue.size()
-
-func _process(_delta):
-	if not playback or audio_queue.is_empty():
-		return
-	
-	var chunks_processed = 0
-	while not audio_queue.is_empty():
-		var next_chunk = audio_queue[0]
-		var frames_needed = int(next_chunk.size() / 2.0)
-		var frames_available = playback.get_frames_available()
-		
-		if frames_available >= frames_needed:
-			var chunk = audio_queue.pop_front()
-			wrapper_script.convert_pcm_to_frames(playback, chunk)
-			chunks_processed += 1
-		else:
-			break
-	
-	if chunks_processed > 0 and log_callback:
-		log_callback.call("🔄 Processed " + str(chunks_processed) + " chunk(s), " + str(audio_queue.size()) + " remaining in queue")
-"""
-	queue_script.reload()
-	queue_processor_node.set_script(queue_script)
-	queue_processor_node.set("playback", playback)
-	queue_processor_node.set("wrapper_script", ElevenLabsWrapperScript)
-	queue_processor_node.set("log_callback", log_info)
-	
-	# Real-time audio handler - queues chunks for smooth playback
-	var chunk_handler = func(audio: PackedByteArray, ctx_id: String):
-		print("[TTSTest] 🎧 chunk_handler called! ctx_id='%s', expected='%s', size=%d" % [ctx_id, context_id, audio.size()])
+	# Track when audio is received (for test validation)
+	var audio_received_handler = func(_audio: PackedByteArray, ctx_id: String):
 		if ctx_id == context_id:
 			state["audio_received"] = true
-			var frames_needed = int(audio.size() / 2.0)
-			var frames_available = playback.get_frames_available()
-			var queue_size_now = queue_processor_node.queue_size()
-			
-			print("[TTSTest] 📊 Buffer check: needed=%d, available=%d, queue_size=%d" % [frames_needed, frames_available, queue_size_now])
-			
-			if frames_available >= frames_needed and queue_size_now == 0:
-				# Buffer has space AND no queue - push immediately
-				log_info("⚡ Real-time chunk (" + str(audio.size()) + " bytes) - Pushing to buffer NOW!")
-				ElevenLabsWrapperScript.convert_pcm_to_frames(playback, audio)
-			else:
-				# Buffer full OR queue has items - add to queue
-				log_info("📦 Real-time chunk (" + str(audio.size()) + " bytes) - Queued (buffer: " + str(frames_available) + "/" + str(frames_needed) + ")")
-				queue_processor_node.add_chunk(audio)
-		else:
-			print("[TTSTest] ⚠️ Received chunk for DIFFERENT context: '%s' (expected '%s')" % [ctx_id, context_id])
 	
 	var complete_handler = func(ctx_id: String):
 		if ctx_id == context_id:
@@ -311,43 +234,47 @@ func _process(_delta):
 		if ctx_id == context_id:
 			log_error("❌ Synthesis error: " + str(error))
 	
-	ElevenLabsWrapper.audio_chunk_ready.connect(chunk_handler)
+	ElevenLabsWrapper.audio_chunk_ready.connect(audio_received_handler)
 	ElevenLabsWrapper.synthesis_completed.connect(complete_handler)
 	ElevenLabsWrapper.synthesis_error.connect(error_handler)
 	
 	# Create agent using LLMManager (simple and clean!)
 	log_info("🤖 Creating LLMAgent via LLMManager...")
-	var agent_config = {
+	var agent = LLMManager.create_agent({
 		"model": "gpt-4o-mini",
 		"temperature": 0.7,
 		"system_prompt": "You are a helpful assistant.",
 		"max_output_tokens": 100
-	}
-	
-	# Use LLMManager factory - handles wrapper injection automatically!
-	var agent = LLMManager.create_agent(agent_config, [])
+	}, [])
 	
 	if not agent:
-		log_error("❌ Failed to create agent (LLMManager not configured?)")
+		log_error("❌ Failed to create agent")
 		_record_test_result("streaming_realtime", false, "Agent creation failed")
-		player.queue_free()
+		player.cleanup()
 		return
 	
 	log_info("🤖 Starting LLM stream...")
 	log_info("   Prompt: 'Say hello in exactly 10 words'")
 	
-	# Connect to LLM's delta signal to stream text to TTS
+	# ✨ SIMPLIFIED: Just feed text directly - batching is automatic!
 	var delta_handler = func(_run_id: String, text_delta: String):
 		if text_delta and text_delta.length() > 0:
-			log_info("   📝 LLM chunk: '" + text_delta + "' → Feeding to TTS")
+			log_info("   📝 LLM chunk: '" + text_delta + "'")
+			# Wrapper handles batching automatically! Just feed text.
 			ElevenLabsWrapper.feed_text_to_character(context_id, text_delta)
 	
 	var finished_handler = func(_run_id: String, _ok: bool, _result: Dictionary):
 		log_success("✅ LLM finished generating")
-		state["llm_complete"] = true
-		# Close TTS input stream
-		ElevenLabsWrapper.finish_character_speech(context_id)
-		log_info("🏁 TTS input closed")
+		# Flush any remaining buffered text (Python SDK text_chunker does this)
+		var final_buffer = ElevenLabsWrapper.character_contexts[context_id]["batch_buffer"]
+		if final_buffer and final_buffer.length() > 0:
+			log_info("   📤 Flushing final buffer: '%s'" % final_buffer)
+			# Feed with flush_immediately=true to force send
+			ElevenLabsWrapper.feed_text_to_character(context_id, "", true)
+		
+		# Python SDK: Send {"text":""} and drain remaining messages
+		log_info("   🏁 Sending close signal and draining...")
+		await ElevenLabsWrapper.finish_character_speech(context_id)
 	
 	agent.delta.connect(delta_handler)
 	agent.finished.connect(finished_handler)
@@ -355,64 +282,36 @@ func _process(_delta):
 	# Start LLM streaming (ainvoke = streaming, returns run_id)
 	agent.ainvoke(Message.user_simple("Say hello in exactly 10 words"))
 	
-	# Wait for LLM to complete
-	var timeout = 15.0
+	# Wait for synthesis to complete (that's it!)
+	log_info("⏳ Waiting for synthesis...")
+	var timeout = 10.0
 	var elapsed = 0.0
-	while not state["llm_complete"] and elapsed < timeout:
-		await get_tree().create_timer(0.1).timeout
-		elapsed += 0.1
-	
-	if not state["llm_complete"]:
-		log_error("❌ LLM timeout!")
-	
-	# Wait for synthesis to complete
-	elapsed = 0.0
 	while not state["synthesis_complete"] and elapsed < timeout:
 		await get_tree().create_timer(0.1).timeout
 		elapsed += 0.1
 	
-	# Wait for queue to be fully processed
-	var current_queue_size = queue_processor_node.queue_size()
-	log_info("⏳ Waiting for audio queue to be processed... Queue size: " + str(current_queue_size))
-	elapsed = 0.0
-	var last_queue_size = current_queue_size
-	while current_queue_size > 0 and elapsed < timeout:
-		await get_tree().create_timer(0.05).timeout  # Check more frequently
-		elapsed += 0.05
-		current_queue_size = queue_processor_node.queue_size()
-		if current_queue_size != last_queue_size:
-			log_info("   Queue draining: " + str(current_queue_size) + " chunks remaining")
-			last_queue_size = current_queue_size
+	if state["synthesis_complete"]:
+		log_success("✅ Synthesis complete! Waiting for audio to finish playing...")
+		# Wait for audio buffer to drain (PCM_BUFFER_LENGTH + safety margin)
+		var drain_time = ElevenLabsWrapperScript.PCM_BUFFER_LENGTH + 0.5
+		log_info("   ⏳ Allowing %0.1fs for audio buffer to drain..." % drain_time)
+		await get_tree().create_timer(drain_time).timeout
+		log_success("✅ Audio playback complete!")
 	
-	if current_queue_size == 0:
-		log_info("✅ Queue empty!")
-	else:
-		log_error("❌ Queue timeout! Still " + str(current_queue_size) + " chunks in queue")
-	
-	# Wait for buffer to be played out (buffer_length + safety margin)
-	var buffer_drain_time = generator.buffer_length + 0.5  # Buffer time + 0.5s safety
-	log_info("⏳ Waiting " + str(buffer_drain_time) + "s for buffer to drain...")
-	await get_tree().create_timer(buffer_drain_time).timeout
-	
-	# Cleanup signals
+	# Cleanup
 	agent.delta.disconnect(delta_handler)
 	agent.finished.disconnect(finished_handler)
-	ElevenLabsWrapper.audio_chunk_ready.disconnect(chunk_handler)
+	ElevenLabsWrapper.audio_chunk_ready.disconnect(audio_received_handler)
 	ElevenLabsWrapper.synthesis_completed.disconnect(complete_handler)
 	ElevenLabsWrapper.synthesis_error.disconnect(error_handler)
-	
-	if state["audio_received"] and state["llm_complete"]:
-		_record_test_result("streaming_realtime", true, "Real-time LLM→TTS streaming successful!")
-	else:
-		var reason = "LLM complete: " + str(state["llm_complete"]) + ", Audio received: " + str(state["audio_received"])
-		_record_test_result("streaming_realtime", false, reason)
-	
-	# Cleanup resources
-	queue_processor_node.queue_free()  # Remove dedicated processor node
-	player.queue_free()
-	# Agent managed by LLMManager - no manual cleanup needed!
+	player.cleanup()
 	ElevenLabsWrapper.destroy_character_context(context_id)
-	log_info("✅ Real-time LLM streaming test complete")
+	
+	# Record result
+	var success = state["audio_received"] and state["synthesis_complete"]
+	var msg = "Real-time LLM→TTS successful!" if success else "No audio received"
+	_record_test_result("streaming_realtime", success, msg)
+	log_success("✅ Real-time LLM streaming test complete")
 
 ## ========== UTILITY METHODS ==========
 
