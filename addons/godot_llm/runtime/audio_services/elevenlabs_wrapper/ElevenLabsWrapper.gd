@@ -478,6 +478,14 @@ func _send_text_to_context(context_id: String, text: String, force_flush: bool =
 	
 	synthesis_started.emit(context_id)
 	
+	# Python SDK: Opportunistic receive after sending (non-blocking)
+	# Try to get early audio chunks immediately to reduce latency
+	ws.poll()
+	if ws.get_available_packet_count() > 0:
+		var packet = ws.get_packet()
+		_handle_websocket_message(context_id, packet)
+		print("[ElevenLabs] 🎯 Opportunistic receive: got early audio chunk!")
+	
 	print("ElevenLabs: Sent text to context ", context_id, ": '", text, "'")
 
 ## Send end-of-input signal to character context
