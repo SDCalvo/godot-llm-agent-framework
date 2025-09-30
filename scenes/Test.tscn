@@ -178,6 +178,10 @@ text = "Email Test"
 layout_mode = 2
 text = "Async Email Test"
 
+[node name="TTSTestBtn" type="Button" parent="TestUI/UIContainer/TestButtonsPanel/ButtonGrid"]
+layout_mode = 2
+text = "TTS Test"
+
 [node name="OutputConsole" type="Panel" parent="TestUI/UIContainer"]
 layout_mode = 1
 anchors_preset = 12

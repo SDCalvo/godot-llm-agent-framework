@@ -30,6 +30,10 @@ var calc_distance_btn: Button
 var random_color_btn: Button
 var email_test_btn: Button
 var async_email_test_btn: Button
+var tts_test_btn: Button
+
+# Test scripts
+var tts_test: Node
 
 # State tracking
 var current_stream_id: String = ""
@@ -79,6 +83,7 @@ func _setup_ui_references() -> void:
 	random_color_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/RandomColorBtn"
 	email_test_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/EmailTestBtn"
 	async_email_test_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/AsyncEmailTestBtn"
+	tts_test_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/TTSTestBtn"
 	
 	# Connect console controls
 	clear_btn.pressed.connect(func(): console_output.text = "")
@@ -251,7 +256,12 @@ func _setup_email_test() -> void:
 	async_email_test.test_completed.connect(_on_async_email_test_completed)
 	async_email_test.test_progress.connect(_on_async_email_test_progress)
 	
-	log_info("Email system tests initialized")
+	# Load and initialize TTS test
+	var tts_test_script = load("res://scenes/TTSTest.gd")
+	tts_test = tts_test_script.new()
+	add_child(tts_test)
+	
+	log_info("All test systems initialized")
 
 func _connect_test_buttons() -> void:
 	wrapper_call_btn.pressed.connect(_test_wrapper_call)
@@ -264,6 +274,7 @@ func _connect_test_buttons() -> void:
 	random_color_btn.pressed.connect(_test_random_color)
 	email_test_btn.pressed.connect(_test_email_system)
 	async_email_test_btn.pressed.connect(_test_async_email_system)
+	tts_test_btn.pressed.connect(_test_tts_system)
 
 # =============================================================================
 # TEST FUNCTIONS
@@ -539,3 +550,10 @@ func _on_async_email_test_completed(success: bool, message: String) -> void:
 
 func _on_async_email_test_progress(phase: String, details: String) -> void:
 	log_info("🔄 " + phase + ": " + details)
+
+func _test_tts_system() -> void:
+	log_test("🔊 Starting ElevenLabs TTS System Test...")
+	if tts_test != null:
+		await tts_test.run_tts_test(console_output)
+	else:
+		log_error("❌ TTS test not initialized")

@@ -193,10 +193,14 @@ Audio Stream → OpenAI STT → Complete Text → LLM Agent → Text Stream → 
    - Supports multiple models: `gpt-4o-transcribe`, `whisper-1`, `gpt-4o-mini-transcribe`
    - Noise reduction (near-field/far-field)
    - Language hints and custom prompts
-2. **ElevenLabs TTS Service** (`ElevenLabsWrapper`) - 🔧 **Needs Streaming Implementation**
-   - Framework complete, needs streaming synthesis implementation
+2. **ElevenLabs TTS Service** (`ElevenLabsWrapper`) - ✅ **WebSocket Streaming Complete**
+   - Real-time WebSocket streaming via Multi-Context API
+   - Per-character context management for simultaneous speech
    - Voice selection and voice settings configuration
-   - Audio chunk streaming for real-time playback
+   - **Dual-Mode Audio Streaming:**
+     - **BUFFERED** (default): MP3 format, collect-and-play (lower latency impact, smoother playback)
+     - **REAL_TIME**: PCM format, play-as-received (lowest latency, requires AudioStreamGenerator)
+   - Methods: `create_character_context()`, `speak_as_character()`, `feed_text_to_character()`, `finish_character_speech()`, `destroy_character_context()`, `set_streaming_mode()`
 3. **Audio Manager** - ❌ **Removed by Design**
    - Decided against centralized audio I/O management
    - Users handle their own microphone/speaker integration
@@ -217,14 +221,78 @@ OpenAISTT.transcription_completed.connect(func(text, session_id):
 **🔊 TTS Usage Pattern:**
 
 ```gdscript
-# Agent streams response text
-agent.delta.connect(func(run_id, text_delta):
-    ElevenLabsWrapper.synthesize_text(text_delta))  # Stream to TTS as agent generates
+# Initialize with desired streaming mode (optional, defaults to BUFFERED)
+ElevenLabsWrapper.initialize(api_key, ElevenLabsWrapper.StreamingMode.BUFFERED)
+# Or switch modes at runtime:
+ElevenLabsWrapper.set_streaming_mode(ElevenLabsWrapper.StreamingMode.REAL_TIME)
 
-# TTS streams audio back
-ElevenLabsWrapper.audio_chunk_ready.connect(func(audio, stream_id):
-    user_speaker.play(audio))  # User handles audio output
+# Create a character context with a specific voice
+await ElevenLabsWrapper.create_character_context("npc_hero", "21m00Tcm4TlvDq8ikWAM")
+
+# Option 1: Complete utterance (auto-closes after sending)
+ElevenLabsWrapper.speak_as_character("npc_hero", "Hello! Welcome to the game!")
+
+# Option 2: Streaming text chunks (for LLM agent streaming)
+agent.delta.connect(func(run_id, text_delta):
+    ElevenLabsWrapper.feed_text_to_character("npc_hero", text_delta))
+agent.completed.connect(func(run_id):
+    ElevenLabsWrapper.finish_character_speech("npc_hero"))
+
+# ============================================================
+# AUDIO PLAYBACK API - TWO MODES:
+# ============================================================
+
+# === BUFFERED MODE (MP3 - default, SIMPLE) ===
+# HIGH-LEVEL API: ElevenLabs emits ready-to-play AudioStream
+# Just create a player and listen for audio_stream_ready!
+
+var player = AudioStreamPlayer.new()
+add_child(player)
+
+ElevenLabsWrapper.audio_stream_ready.connect(func(stream: AudioStream, ctx_id: String):
+    player.stream = stream  # Assign AudioStreamMP3
+    player.play())          # Play immediately!
+
+# === REAL-TIME MODE (PCM - ADVANCED, lowest latency) ===
+# LOW-LEVEL API: ElevenLabs emits raw PCM chunks
+# User needs AudioStreamGenerator + helper function
+
+# 1. Setup generator (use provided constants!)
+var player = AudioStreamPlayer.new()
+add_child(player)
+var generator = AudioStreamGenerator.new()
+generator.mix_rate = ElevenLabsWrapper.PCM_SAMPLE_RATE        # 16000 Hz
+generator.buffer_length = ElevenLabsWrapper.PCM_BUFFER_LENGTH # 0.1 (100ms)
+player.stream = generator
+player.play()
+
+var playback = player.get_stream_playback()
+
+# 2. Handle chunks with provided helper
+ElevenLabsWrapper.audio_chunk_ready.connect(func(pcm: PackedByteArray, ctx_id: String):
+    # Use static helper to convert PCM → frames!
+    ElevenLabsWrapper.convert_pcm_to_frames(playback, pcm))
+
+# Cleanup when done
+ElevenLabsWrapper.destroy_character_context("npc_hero")
 ```
+
+**🎵 Audio Playback Helpers:**
+
+ElevenLabsWrapper provides helpers for easy integration:
+
+- **Constants:**
+
+  - `PCM_SAMPLE_RATE = 16000` - Sample rate for PCM audio
+  - `PCM_BUFFER_LENGTH = 0.1` - Recommended buffer length (100ms)
+
+- **Static Helper:**
+
+  - `convert_pcm_to_frames(playback: AudioStreamGeneratorPlayback, pcm_data: PackedByteArray)` - Converts 16-bit PCM to audio frames
+
+- **Signals:**
+  - `audio_stream_ready(stream: AudioStream, context_id: String)` - HIGH-LEVEL: Ready-to-play AudioStreamMP3 (BUFFERED mode only)
+  - `audio_chunk_ready(audio_data: PackedByteArray, context_id: String)` - LOW-LEVEL: Raw audio chunks (both modes)
 
 **⚙️ Voice Activity Detection (VAD):**
 
@@ -240,6 +308,50 @@ ElevenLabsWrapper.audio_chunk_ready.connect(func(audio, stream_id):
 - Fallback to `.env` file support
 - Consistent initialization pattern across all services
 - Graceful degradation with warnings if keys missing
+
+**🌐 ElevenLabs WebSocket Protocol:**
+
+The ElevenLabs TTS WebSocket API follows a specific 3-message pattern:
+
+1. **Handshake (Initialize Connection)**:
+
+   ```json
+   {
+     "text": " ", // REQUIRED: must be a blank space
+     "voice_settings": {
+       "stability": 0.5,
+       "similarity_boost": 0.8
+     },
+     "xi_api_key": "<YOUR_API_KEY>" // Authentication
+   }
+   ```
+
+2. **Send Text (Generate Audio)**:
+
+   ```json
+   {
+     "text": "Hello World",
+     "try_trigger_generation": true // Immediately trigger synthesis
+   }
+   ```
+
+3. **Close Connection (End Input)**:
+   ```json
+   {
+     "text": "" // Empty string signals end of input
+   }
+   ```
+
+**Received Messages:**
+
+- `{"audio": "base64_mp3_data", "isFinal": false, ...}` - Audio chunks
+- `{"isFinal": true}` - Generation complete
+
+**Connection Management:**
+
+- **Inactivity Timeout:** Set to 180 seconds (max allowed, default is 20s)
+- **Keepalive Mechanism:** Automatically sends `{"text": " "}` every 15 seconds to prevent timeout
+- **Important:** Send `" "` (space) for keepalive, NOT `""` (empty string closes connection)
 
 **🎯 Benefits:**
 
@@ -499,3 +611,5 @@ The LLMEmailManager implements a simple email metaphor for agent communication. 
 ---
 
 _This plugin provides a solid foundation for LLM integration in Godot games, with room for expansion into sophisticated multi-agent scenarios and game-specific AI features._
+
+check what models are we using from eleven labs how theya re charged and if we are allowing it from config
