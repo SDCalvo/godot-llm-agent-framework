@@ -3,6 +3,17 @@
 ## Provides REAL-TIME streaming TTS functionality using ElevenLabs WebSocket API
 ## Supports multiple character contexts and real-time text-to-speech conversion
 ##
+## USAGE:
+##   # Optional: Change model (default is eleven_turbo_v2)
+##   ElevenLabsWrapper.set_model("eleven_multilingual_v2")
+##   
+##   # Optional: Change streaming mode (default is BUFFERED)
+##   ElevenLabsWrapper.set_streaming_mode(ElevenLabsWrapper.StreamingMode.REAL_TIME)
+##   
+##   # Create context and speak
+##   ElevenLabsWrapper.create_character_context("character1", "voice_id")
+##   ElevenLabsWrapper.speak_as_character("character1", "Hello world!")
+##
 ## @tutorial: https://elevenlabs.io/docs/websockets
 
 extends Node
@@ -46,7 +57,8 @@ const PCM_BUFFER_LENGTH: float = 4.0
 
 ## ElevenLabs API configuration
 var api_key: String = ""
-var websocket_url: String = "wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input?model_id=eleven_turbo_v2&inactivity_timeout=180"
+var model_id: String = "eleven_turbo_v2"  # Default model (eleven_turbo_v2, eleven_multilingual_v2, etc.)
+var websocket_url: String = "wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input?model_id={model_id}&inactivity_timeout=180"
 var default_voice_id: String = "21m00Tcm4TlvDq8ikWAM"  # Default voice
 var inactivity_timeout: int = 180  # Max 180 seconds (default is 20)
 
@@ -100,6 +112,17 @@ func set_streaming_mode(mode: StreamingMode) -> void:
 	streaming_mode = mode
 	var mode_str = "BUFFERED" if mode == StreamingMode.BUFFERED else "REAL_TIME"
 	print("ElevenLabs: Streaming mode changed to %s" % mode_str)
+
+## Set the ElevenLabs model to use
+## Available models:
+##   - "eleven_turbo_v2" (default) - Fastest, lowest latency, great quality
+##   - "eleven_multilingual_v2" - Supports 29 languages
+##   - "eleven_monolingual_v1" - English only, high quality
+##   - "eleven_flash_v2" - Ultra-fast, lower quality
+##   - "eleven_flash_v2_5" - Balanced speed/quality
+func set_model(new_model_id: String) -> void:
+	model_id = new_model_id
+	print("ElevenLabs: Model changed to %s" % model_id)
 
 ## Get the output format based on streaming mode
 func _get_output_format() -> String:
@@ -370,8 +393,8 @@ func _connect_to_voice(context_id: String, voice_id: String) -> void:
 	context["connection_state"] = "connecting"
 	print("[ElevenLabs] 🔌 WebSocket peer created, state: connecting")
 	
-	# Build WebSocket URL with voice and output format (NO API key in URL)
-	var url = websocket_url.replace("{voice_id}", voice_id)
+	# Build WebSocket URL with voice, model, and output format (NO API key in URL)
+	var url = websocket_url.replace("{voice_id}", voice_id).replace("{model_id}", model_id)
 	var output_format = _get_output_format()
 	url += "&output_format=" + output_format
 	
