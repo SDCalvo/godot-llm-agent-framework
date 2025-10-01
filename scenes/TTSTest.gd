@@ -202,6 +202,11 @@ func _test_streaming_realtime() -> void:
 	var context_id = "realtime_llm_test"
 	var voice_id = "EXAVITQu4vr4xnSDxMaL"  # Bella
 	
+	# Ensure clean state (destroy if exists from previous run)
+	if ElevenLabsWrapper.character_contexts.has(context_id):
+		log_warning("⚠️ Context already exists from previous run - destroying it first...")
+		ElevenLabsWrapper.destroy_character_context(context_id)
+	
 	log_info("📝 Creating real-time streaming context...")
 	var created = await ElevenLabsWrapper.create_character_context(context_id, voice_id)
 	
@@ -243,8 +248,7 @@ func _test_streaming_realtime() -> void:
 	var agent = LLMManager.create_agent({
 		"model": "gpt-4o-mini",
 		"temperature": 0.7,
-		"system_prompt": "You are a helpful assistant.",
-		"max_output_tokens": 100
+		"system_prompt": "You are a helpful assistant."
 	}, [])
 	
 	if not agent:
@@ -253,11 +257,15 @@ func _test_streaming_realtime() -> void:
 		player.cleanup()
 		return
 	
+	# Define the prompt
+	var prompt = "Please tell me a bit about yourself. Include details about your capabilities, personality, and purpose. Aim for around 100 words max."
+	
 	log_info("🤖 Starting LLM stream...")
-	log_info("   Prompt: 'Say hello in exactly 10 words'")
+	log_info("   Prompt: '" + prompt + "'")
 	
 	# ✨ SIMPLIFIED: Just feed text directly - batching is automatic!
 	var delta_handler = func(_run_id: String, text_delta: String):
+		print("[TEST DEBUG] delta_handler called - run_id='%s', delta='%s', len=%d" % [_run_id, text_delta, text_delta.length()])
 		if text_delta and text_delta.length() > 0:
 			log_info("   📝 LLM chunk: '" + text_delta + "'")
 			# Wrapper handles batching automatically! Just feed text.
@@ -276,36 +284,45 @@ func _test_streaming_realtime() -> void:
 		log_info("   🏁 Sending close signal and draining...")
 		await ElevenLabsWrapper.finish_character_speech(context_id)
 	
+	# Wait for playback to finish (signal-based, no arbitrary timeouts!)
+	var playback_complete = {"finished": false}
+	var playback_handler = func(ctx_id: String):
+		if ctx_id == context_id:
+			playback_complete["finished"] = true
+			log_success("✅ Playback finished - all audio played!")
+	
+	ElevenLabsWrapper.playback_finished.connect(playback_handler)
+	
 	agent.delta.connect(delta_handler)
 	agent.finished.connect(finished_handler)
 	
 	# Start LLM streaming (ainvoke = streaming, returns run_id)
-	agent.ainvoke(Message.user_simple("Say hello in exactly 10 words"))
+	agent.ainvoke(Message.user_simple(prompt))
 	
-	# Wait for synthesis to complete (that's it!)
+	# Wait for synthesis and playback to complete
 	log_info("⏳ Waiting for synthesis...")
-	var timeout = 10.0
-	var elapsed = 0.0
-	while not state["synthesis_complete"] and elapsed < timeout:
+	while not state["synthesis_complete"]:
 		await get_tree().create_timer(0.1).timeout
-		elapsed += 0.1
 	
-	if state["synthesis_complete"]:
-		log_success("✅ Synthesis complete! Waiting for audio to finish playing...")
-		# Wait for audio buffer to drain (PCM_BUFFER_LENGTH + safety margin)
-		var drain_time = ElevenLabsWrapperScript.PCM_BUFFER_LENGTH + 0.5
-		log_info("   ⏳ Allowing %0.1fs for audio buffer to drain..." % drain_time)
-		await get_tree().create_timer(drain_time).timeout
-		log_success("✅ Audio playback complete!")
+	# Synthesis done, now wait for playback
+	log_success("✅ Synthesis complete! Waiting for all audio to finish playing...")
+	while not playback_complete["finished"]:
+		await get_tree().create_timer(0.1).timeout
 	
 	# Cleanup
+	log_info("🧹 Cleaning up test resources...")
+	ElevenLabsWrapper.playback_finished.disconnect(playback_handler)
 	agent.delta.disconnect(delta_handler)
 	agent.finished.disconnect(finished_handler)
 	ElevenLabsWrapper.audio_chunk_ready.disconnect(audio_received_handler)
 	ElevenLabsWrapper.synthesis_completed.disconnect(complete_handler)
 	ElevenLabsWrapper.synthesis_error.disconnect(error_handler)
 	player.cleanup()
-	ElevenLabsWrapper.destroy_character_context(context_id)
+	
+	# Destroy context (cleanup is synchronous, no wait needed)
+	if ElevenLabsWrapper.character_contexts.has(context_id):
+		log_info("   🗑️ Destroying context: " + context_id)
+		ElevenLabsWrapper.destroy_character_context(context_id)
 	
 	# Record result
 	var success = state["audio_received"] and state["synthesis_complete"]

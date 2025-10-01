@@ -28,11 +28,11 @@ signal audio_stream_ready(stream: AudioStream, context_id: String)
 ## BUFFERED mode: MP3 bytes | REAL-TIME mode: PCM bytes
 signal audio_chunk_ready(audio_data: PackedByteArray, context_id: String)
 
-## Emitted when synthesis starts for a context
-signal synthesis_started(context_id: String)
-
-## Emitted when synthesis completes successfully
+## Emitted when synthesis completes successfully (isFinal received from ElevenLabs)
 signal synthesis_completed(context_id: String)
+
+## Emitted when playback is completely finished (all chunks played, safe to cleanup)
+signal playback_finished(context_id: String)
 
 ## Emitted when synthesis encounters an error
 signal synthesis_error(context_id: String, error: Dictionary)
@@ -52,8 +52,8 @@ signal character_context_destroyed(context_id: String)
 const PCM_SAMPLE_RATE: int = 16000
 
 ## Recommended buffer length for real-time playback
-## 4.0 seconds = 64000 frames (large buffer for smooth prebuffered playback)
-const PCM_BUFFER_LENGTH: float = 4.0
+## 8.0 seconds = 128000 frames at 16kHz (large buffer to handle chunk bursts)
+const PCM_BUFFER_LENGTH: float = 8.0
 
 ## ElevenLabs API configuration
 var api_key: String = ""
@@ -68,12 +68,6 @@ enum StreamingMode {
 	REAL_TIME    ## Play chunks as they arrive (lowest latency, requires PCM format)
 }
 var streaming_mode: StreamingMode = StreamingMode.BUFFERED  ## Default to buffered mode
-
-## Text batching configuration (for smoother, more natural speech)
-var enable_text_batching: bool = true  ## Automatically batch text chunks for natural phrasing
-var text_batch_min_chars: int = 20     ## Minimum characters before considering flush
-var text_batch_max_chars: int = 50     ## Maximum characters before forced flush
-var text_batch_timeout_ms: int = 500   ## Max time to wait before flushing medium-sized buffer
 
 ## Voice settings (applied to all contexts)
 var voice_stability: float = 0.5
@@ -90,11 +84,6 @@ var active_voice: String = ""
 
 ## Audio chunk collection (for BUFFERED mode to emit audio_stream_ready)
 var collected_audio_chunks: Dictionary = {}  # context_id -> Array[PackedByteArray]
-
-## Rubberband keepalive configuration (adaptive intervals)
-const KEEPALIVE_INITIAL_INTERVAL = 30.0  # Start at 30s after first idle period
-const KEEPALIVE_MAX_INTERVAL = 150.0     # Max interval (stop at 150s, let timeout at 180s)
-const KEEPALIVE_MULTIPLIER = 1.5         # Each keepalive extends interval by 50%
 
 func _ready():
 	websocket = WebSocketPeer.new()
@@ -127,50 +116,35 @@ func set_model(new_model_id: String) -> void:
 ## Get the output format based on streaming mode
 func _get_output_format() -> String:
 	if streaming_mode == StreamingMode.REAL_TIME:
-		return "pcm_16000"  # PCM for real-time chunk playback
+		return "pcm_16000"  # PCM 16kHz - best quality, text chunking prevents "Message too big"
 	else:
 		return "mp3_44100_128"  # MP3 for buffered playback (default)
 
 ## Create a character context for a specific voice
 ## Returns the context_id for this character
 func create_character_context(context_id: String, voice_id: String = "") -> bool:
-	print("[ElevenLabs] >>> create_character_context('%s', '%s')" % [context_id, voice_id])
-	
 	if api_key.is_empty():
-		print("[ElevenLabs] ❌ API key not set!")
 		push_error("ElevenLabs API key not set")
 		return false
 	
 	if voice_id.is_empty():
 		voice_id = default_voice_id
-		print("[ElevenLabs] 📝 Using default voice: %s" % voice_id)
 	
 	if character_contexts.has(context_id):
-		print("[ElevenLabs] ⚠️ Context '%s' already exists!" % context_id)
 		push_warning("Context already exists: " + context_id)
 		return false
 	
 	# Store context info
-	print("[ElevenLabs] 📦 Creating context data for '%s'..." % context_id)
 	character_contexts[context_id] = {
 		"voice_id": voice_id,
 		"websocket": null,
 		"connection_state": "disconnected",
-		"text_buffer": "",
-		"is_speaking": false,
-		"last_activity": Time.get_ticks_msec(),  # Track last message sent
-		"next_keepalive_interval": KEEPALIVE_INITIAL_INTERVAL,  # Rubberband: current interval
-		"time_since_last_keepalive": 0.0,  # Accumulated time for next keepalive
-		# Text batching state
-		"batch_buffer": "",  # Accumulated text for batching
-		"batch_last_flush": Time.get_ticks_msec()  # Last time we flushed batch
+		"batch_buffer": "",  # Text batching (matches Python SDK text_chunker)
 	}
 	
 	# Connect to WebSocket for this voice
-	print("[ElevenLabs] 🔌 Connecting to WebSocket for '%s'..." % context_id)
 	await _connect_to_voice(context_id, voice_id)
 	
-	print("[ElevenLabs] ✅ Context '%s' created successfully (voice: %s)" % [context_id, voice_id])
 	character_context_created.emit(context_id, voice_id)
 	return true
 
@@ -204,19 +178,15 @@ func speak_as_character(context_id: String, text: String) -> bool:
 ## Send text chunk to character (for streaming text input)
 ## @param flush_immediately: If true, forces immediate audio generation (use for final chunk)
 func feed_text_to_character(context_id: String, text_chunk: String, flush_immediately: bool = false) -> bool:
-	print("[ElevenLabs] >>> feed_text_to_character('%s', '%s', flush=%s)" % [context_id, text_chunk, flush_immediately])
-	
 	if not character_contexts.has(context_id):
-		print("[ElevenLabs] ⚠️ Context '%s' not found!" % context_id)
 		push_warning("Character context not found: " + context_id)
 		return false
 	
 	var context = character_contexts[context_id]
 	
-	# Python SDK approach: Smart batching for REAL_TIME (text_chunker logic)
-	# Accumulate text and send on sentence boundaries (punctuation)
+	# Python SDK approach: Text batching for REAL_TIME mode (matches text_chunker logic)
 	if streaming_mode == StreamingMode.REAL_TIME:
-		# Accumulate text in buffer
+		# Accumulate text and send on sentence boundaries (punctuation)
 		context["batch_buffer"] += text_chunk
 		
 		# Check if we should send (sentence boundary or flush requested)
@@ -235,49 +205,29 @@ func feed_text_to_character(context_id: String, text_chunk: String, flush_immedi
 			# Ensure it ends with space (Python SDK does this)
 			if not text_to_send.ends_with(" "):
 				text_to_send += " "
-			print("[ElevenLabs] 📤 [REAL_TIME] Sending batched text: '%s'" % text_to_send)
 			_send_text_to_context(context_id, text_to_send, flush_immediately)
 			context["batch_buffer"] = ""
-		else:
-			print("[ElevenLabs] 🔄 [REAL_TIME] Buffering: '%s' (%d chars)" % [text_chunk, context["batch_buffer"].length()])
-	elif enable_text_batching and not flush_immediately:
-		# BUFFERED: Accumulate text for smoother MP3 generation
-		context["batch_buffer"] += text_chunk
-		var buffer_len = context["batch_buffer"].length()
-		print("[ElevenLabs] 🔄 [BUFFERED] Buffering text (%d chars)..." % buffer_len)
 	else:
-		# BUFFERED final flush or batching disabled
-		if flush_immediately and enable_text_batching and context["batch_buffer"].length() > 0:
-			print("[ElevenLabs] 📦 Final batch flush: '%s'" % context["batch_buffer"])
-			_send_text_to_context(context_id, context["batch_buffer"] + text_chunk, true)
-			context["batch_buffer"] = ""
-		else:
-			print("[ElevenLabs] 📤 Sending chunk to '%s'..." % context_id)
-			_send_text_to_context(context_id, text_chunk, flush_immediately)
+		# BUFFERED mode: Send text directly (no batching needed for MP3 generation)
+		_send_text_to_context(context_id, text_chunk, flush_immediately)
 	
 	return true
 
 ## Finish speaking for a character (end the current speech)
 ## Python SDK: After sending {"text":""}, keep receiving until connection closes
 func finish_character_speech(context_id: String) -> bool:
-	print("[ElevenLabs] >>> finish_character_speech('%s')" % context_id)
-	
 	if not character_contexts.has(context_id):
-		print("[ElevenLabs] ⚠️ Context '%s' not found!" % context_id)
 		return false
 	
 	# Send end-of-input signal to WebSocket
-	print("[ElevenLabs] 🏁 Finishing speech for '%s'..." % context_id)
 	_send_end_of_input(context_id)
 	
 	# Python SDK: DRAIN remaining messages after sending close signal
-	# Keep polling until connection closes or we timeout
 	var context = character_contexts[context_id]
 	var ws = context["websocket"]
-	var max_drain_time = 2.0  # 2 seconds max to drain
+	var max_drain_time = 2.0
 	var drain_start = Time.get_ticks_msec()
 	
-	print("[ElevenLabs] 🚰 Draining final messages for '%s'..." % context_id)
 	while ws and ws.get_ready_state() == WebSocketPeer.STATE_OPEN:
 		ws.poll()
 		
@@ -288,12 +238,10 @@ func finish_character_speech(context_id: String) -> bool:
 		
 		# Timeout check
 		if (Time.get_ticks_msec() - drain_start) / 1000.0 > max_drain_time:
-			print("[ElevenLabs] ⏱️ Drain timeout for '%s' after 2s" % context_id)
 			break
 		
 		await Engine.get_main_loop().process_frame
 	
-	print("[ElevenLabs] ✅ Drain complete for '%s'" % context_id)
 	return true
 
 ## Destroy a character context
@@ -325,19 +273,6 @@ func set_voice_settings(stability: float, similarity_boost: float, style: float 
 func set_default_voice(voice_id: String) -> void:
 	default_voice_id = voice_id
 
-## Configure text batching behavior
-## @param enabled: Enable/disable automatic text batching
-## @param min_chars: Minimum characters before considering flush (default: 20)
-## @param max_chars: Maximum characters before forced flush (default: 50)
-## @param timeout_ms: Max time to wait before flushing (default: 500ms)
-func set_text_batching(enabled: bool, min_chars: int = 20, max_chars: int = 50, timeout_ms: int = 500) -> void:
-	enable_text_batching = enabled
-	text_batch_min_chars = min_chars
-	text_batch_max_chars = max_chars
-	text_batch_timeout_ms = timeout_ms
-	var status = "enabled" if enabled else "disabled"
-	print("ElevenLabs: Text batching %s (min:%d, max:%d, timeout:%dms)" % [status, min_chars, max_chars, timeout_ms])
-
 ## Check if the wrapper is properly initialized
 func is_initialized() -> bool:
 	return not api_key.is_empty()
@@ -353,64 +288,35 @@ func is_character_connected(context_id: String) -> bool:
 	return character_contexts[context_id]["connection_state"] == "connected"
 
 ## Process WebSocket events for all contexts
-func _process(delta):
-	# Poll all active WebSocket connections
+func _process(_delta):
+	# Poll all active WebSocket connections (matches Python SDK - poll for incoming messages)
 	for context_id in character_contexts:
 		var context = character_contexts[context_id]
 		if context["websocket"]:
 			_poll_websocket(context_id)
-			
-			# Rubberband keepalive: Adaptive interval that increases with each keepalive
-			if context["connection_state"] == "connected":
-				var time_since_activity = (Time.get_ticks_msec() - context["last_activity"]) / 1000.0
-				
-				# Only start keepalive after initial interval has passed
-				if time_since_activity >= KEEPALIVE_INITIAL_INTERVAL:
-					context["time_since_last_keepalive"] += delta
-					
-					# Time to send keepalive?
-					if context["time_since_last_keepalive"] >= context["next_keepalive_interval"]:
-						# Check if we've hit the max interval (give up point)
-						if context["next_keepalive_interval"] < KEEPALIVE_MAX_INTERVAL:
-							_send_keepalive(context_id)
-							
-							# Rubberband: Increase interval for next keepalive
-							context["next_keepalive_interval"] = min(
-								context["next_keepalive_interval"] * KEEPALIVE_MULTIPLIER,
-								KEEPALIVE_MAX_INTERVAL
-							)
-							context["time_since_last_keepalive"] = 0.0
-						# else: Max interval reached, stop sending keepalives (let it timeout)
 
 ## Internal method to connect to WebSocket for a voice
 func _connect_to_voice(context_id: String, voice_id: String) -> void:
-	print("[ElevenLabs] >>> _connect_to_voice('%s', '%s')" % [context_id, voice_id])
 	var context = character_contexts[context_id]
 	
-	# Create WebSocket connection for this context
+	# Create WebSocket connection with 16MB buffers (fix for "Message too big" error)
 	var ws = WebSocketPeer.new()
+	ws.set_inbound_buffer_size(16 * 1024 * 1024)  # 16MB
+	ws.set_outbound_buffer_size(16 * 1024 * 1024)  # 16MB
 	context["websocket"] = ws
 	context["connection_state"] = "connecting"
-	print("[ElevenLabs] 🔌 WebSocket peer created, state: connecting")
 	
-	# Build WebSocket URL with voice, model, and output format (NO API key in URL)
+	# Build WebSocket URL
 	var url = websocket_url.replace("{voice_id}", voice_id).replace("{model_id}", model_id)
 	var output_format = _get_output_format()
 	url += "&output_format=" + output_format
 	
-	var format_str = "MP3" if streaming_mode == StreamingMode.BUFFERED else "PCM"
-	print("[ElevenLabs] 🌐 Connecting to: %s" % url)
-	print("[ElevenLabs] 🎵 Output format: %s (%s mode)" % [output_format, format_str])
-	
 	# Connect to WebSocket
 	var error = ws.connect_to_url(url)
 	if error != OK:
-		print("[ElevenLabs] ❌ Failed to connect WebSocket for '%s': %s" % [context_id, error])
 		context["connection_state"] = "error"
 		synthesis_error.emit(context_id, {"error": "Failed to connect WebSocket", "code": error})
 		return
-	
-	print("[ElevenLabs] ⏳ Waiting for WebSocket connection...")
 	
 	# Wait for connection
 	var timeout = 10.0
@@ -421,14 +327,9 @@ func _connect_to_voice(context_id: String, voice_id: String) -> void:
 		
 		if state == WebSocketPeer.STATE_OPEN:
 			context["connection_state"] = "connected"
-			print("[ElevenLabs] ✅ WebSocket connected for '%s'!" % context_id)
-			
-			# Send initial configuration
-			print("[ElevenLabs] 📤 Sending initial handshake...")
 			_send_initial_config(context_id)
 			return
 		elif state == WebSocketPeer.STATE_CLOSED:
-			print("[ElevenLabs] ❌ WebSocket closed unexpectedly while connecting '%s'" % context_id)
 			context["connection_state"] = "error"
 			synthesis_error.emit(context_id, {"error": "WebSocket connection failed"})
 			return
@@ -457,26 +358,21 @@ func _send_initial_config(context_id: String) -> void:
 		"xi_api_key": api_key  # API key for authentication
 	}
 	
-	# For REAL_TIME mode: use minimal chunk schedule for low latency (Python SDK uses [50])
-	if streaming_mode == StreamingMode.REAL_TIME:
-		config_message["generation_config"] = {
-			"chunk_length_schedule": [50]  # Much smaller than default [120,160,250,290]
-		}
+	# For REAL_TIME mode: Let ElevenLabs use default chunk schedule
+	# Python SDK uses [50] but that creates large audio chunks that exceed WebSocket limits
+	# Removing this lets ElevenLabs use optimized defaults to avoid "Message too big" errors
+	# (Default schedule is adaptive and won't exceed WebSocket frame size)
 	
 	var json_string = JSON.stringify(config_message)
-	print("ElevenLabs: Sending initial handshake: ", json_string)
 	ws.send_text(json_string)
-	print("ElevenLabs: Sent initial handshake for context ", context_id)
 
 ## Send text to specific character context
 ## Python SDK NEVER uses flush:true - only try_trigger_generation:true
 func _send_text_to_context(context_id: String, text: String, force_flush: bool = false) -> void:
-	print("[ElevenLabs] >>> _send_text_to_context('%s', '%s')\" % [context_id, text.substr(0, 30) + (\"...\" if text.length() > 30 else \"\")])")
 	var context = character_contexts[context_id]
 	var ws = context["websocket"]
 	
 	if not ws or context["connection_state"] != "connected":
-		print("[ElevenLabs] ❌ Context '%s' not connected! (state: %s)" % [context_id, context["connection_state"]])
 		push_error("Context not connected: " + context_id)
 		return
 	
@@ -487,29 +383,13 @@ func _send_text_to_context(context_id: String, text: String, force_flush: bool =
 	}
 	
 	var json_string = JSON.stringify(text_message)
-	print("[ElevenLabs] 📤 Sending text message to '%s': %s" % [context_id, json_string])
 	ws.send_text(json_string)
 	
-	# Mark as speaking and RESET rubberband keepalive (activity detected!)
-	context["is_speaking"] = true
-	context["last_activity"] = Time.get_ticks_msec()
-	
-	# Rubberband reset: New text = reset to initial interval
-	print("[ElevenLabs] 🔄 Rubberband reset for '%s' (new text activity)" % context_id)
-	context["next_keepalive_interval"] = KEEPALIVE_INITIAL_INTERVAL
-	context["time_since_last_keepalive"] = 0.0
-	
-	synthesis_started.emit(context_id)
-	
-	# Python SDK: Opportunistic receive after sending (non-blocking)
-	# Try to get early audio chunks immediately to reduce latency
+	# Python SDK: Opportunistic receive after sending (non-blocking poll)
 	ws.poll()
 	if ws.get_available_packet_count() > 0:
 		var packet = ws.get_packet()
 		_handle_websocket_message(context_id, packet)
-		print("[ElevenLabs] 🎯 Opportunistic receive: got early audio chunk!")
-	
-	print("ElevenLabs: Sent text to context ", context_id, ": '", text, "'")
 
 ## Send end-of-input signal to character context
 func _send_end_of_input(context_id: String) -> void:
@@ -519,38 +399,9 @@ func _send_end_of_input(context_id: String) -> void:
 	if not ws or context["connection_state"] != "connected":
 		return
 	
-	var end_message = {
-		"text": ""
-	}
-	
+	var end_message = {"text": ""}
 	var json_string = JSON.stringify(end_message)
 	ws.send_text(json_string)
-	
-	print("ElevenLabs: Sent end-of-input for context ", context_id)
-
-## Send keepalive message to prevent inactivity timeout
-## Sends a space character " " (NOT empty string which would close the connection)
-func _send_keepalive(context_id: String) -> void:
-	var context = character_contexts[context_id]
-	var ws = context["websocket"]
-	
-	if not ws or context["connection_state"] != "connected":
-		return
-	
-	# Send a space character to keep connection alive
-	# DO NOT send "" (empty string) - that closes the connection!
-	var keepalive_message = {
-		"text": " "
-	}
-	
-	var json_string = JSON.stringify(keepalive_message)
-	ws.send_text(json_string)
-	
-	# Note: We DON'T update last_activity here (only actual text resets rubberband)
-	# The rubberband interval is managed in _process()
-	
-	# Only log keepalive in verbose mode (comment out for cleaner logs)
-	# print("ElevenLabs: Sent keepalive for context ", context_id, " (interval: ", context["next_keepalive_interval"], "s)")
 
 ## Poll WebSocket for messages
 func _poll_websocket(context_id: String) -> void:
@@ -569,124 +420,69 @@ func _poll_websocket(context_id: String) -> void:
 				var packet = ws.get_packet()
 				_handle_websocket_message(context_id, packet)
 		
+		WebSocketPeer.STATE_CLOSING:
+			print("[ElevenLabs] ⚠️ WebSocket CLOSING for '%s' (code: %d, reason: %s)" % [
+				context_id,
+				ws.get_close_code(),
+				ws.get_close_reason()
+			])
+		
 		WebSocketPeer.STATE_CLOSED:
 			if context["connection_state"] == "connected":
-				# Connection closed (expected after finish_character_speech)
-				print("ElevenLabs: ✓ Context ", context_id, " closed")
+				# Connection closed - log details
+				print("[ElevenLabs] 🔴 WebSocket CLOSED for '%s' (code: %d, reason: %s)" % [
+					context_id,
+					ws.get_close_code(),
+					ws.get_close_reason()
+				])
 				context["connection_state"] = "disconnected"
 
 ## Handle WebSocket message from ElevenLabs
 func _handle_websocket_message(context_id: String, packet: PackedByteArray) -> void:
-	var context = character_contexts[context_id]
-	
-	# Check if this is JSON (text) or binary (audio) data
 	var packet_string = packet.get_string_from_utf8()
-	
-	print("[ElevenLabs] 🔍 RAW MESSAGE for '%s': size=%d bytes, starts_with_brace=%s" % [
-		context_id, 
-		packet.size(), 
-		packet_string.begins_with("{")
-	])
 	
 	if packet_string.begins_with("{"):
 		# JSON message
-		print("[ElevenLabs] 📨 Received JSON for context '%s' (%d bytes)" % [context_id, packet.size()])
-		print("[ElevenLabs] 📄 JSON CONTENT: %s" % packet_string.substr(0, 500))  # First 500 chars
-		
 		var json = JSON.new()
 		var parse_result = json.parse(packet_string)
 		
 		if parse_result == OK:
-			var message = json.data
-			var keys = message.keys() if message is Dictionary else []
-			print("[ElevenLabs] 📋 JSON keys: %s" % str(keys))
-			
-			# Log key fields
-			if message.has("isFinal"):
-				print("[ElevenLabs] 🏁 isFinal: %s" % str(message["isFinal"]))
-			if message.has("audio"):
-				var audio_val = message["audio"]
-				if audio_val == null:
-					print("[ElevenLabs] 🔇 audio: NULL")
-				elif audio_val == "":
-					print("[ElevenLabs] 🔇 audio: EMPTY STRING")
-				else:
-					print("[ElevenLabs] 🎵 audio: base64 string (%d chars)" % str(audio_val).length())
-			
-			_handle_json_message(context_id, message)
-		else:
-			print("[ElevenLabs] ❌ Failed to parse JSON message for context '%s'" % context_id)
+			_handle_json_message(context_id, json.data)
 	else:
 		# Binary audio data
-		print("[ElevenLabs] 🔊 Received BINARY audio for context '%s' (%d bytes)" % [context_id, packet.size()])
 		_handle_audio_data(context_id, packet)
 
 ## Handle JSON message from WebSocket
 func _handle_json_message(context_id: String, message: Dictionary) -> void:
-	print("[ElevenLabs] 🔧 _handle_json_message called for '%s'" % context_id)
-	
-	# Check for authentication success
-	if message.has("message") and message["message"] == "Authentication successful":
-		print("[ElevenLabs] ✅ Authentication successful for '%s'" % context_id)
-		return
-	
+	# Audio chunk
 	if message.has("audio") and message["audio"] != null and message["audio"] != "":
-		print("[ElevenLabs] 🎵 Audio field present and non-empty")
-		# Audio data in base64 (MP3) or raw bytes (PCM)
 		var audio_base64 = message["audio"]
 		if typeof(audio_base64) == TYPE_STRING and audio_base64.length() > 0:
-			print("[ElevenLabs] 🔓 Decoding base64 audio (%d chars)..." % audio_base64.length())
-			# Decode base64 to raw bytes
 			var audio_bytes = Marshalls.base64_to_raw(audio_base64)
-			var format = "MP3" if streaming_mode == StreamingMode.BUFFERED else "PCM"
-			print("[ElevenLabs] 🎵 Audio chunk received for '%s': %d bytes (%s)" % [context_id, audio_bytes.size(), format])
-			print("[ElevenLabs] 📤 Calling _handle_audio_data...")
 			_handle_audio_data(context_id, audio_bytes)
-		else:
-			print("[ElevenLabs] ⚠️ Audio field is not a valid string or is empty")
-	else:
-		print("[ElevenLabs] 🔇 No audio in this message (audio=%s)" % str(message.get("audio", "NOT_PRESENT")))
 	
+	# Synthesis complete
 	if message.has("isFinal") and message["isFinal"]:
-		# Speech generation completed
-		print("[ElevenLabs] 🏁 isFinal received for '%s' - synthesis complete!" % context_id)
-		var context = character_contexts[context_id]
-		context["is_speaking"] = false
-		
 		# If BUFFERED mode, emit ready-to-play AudioStream
 		if streaming_mode == StreamingMode.BUFFERED and collected_audio_chunks.has(context_id):
 			var chunks = collected_audio_chunks[context_id]
-			print("[ElevenLabs] 📦 Processing %d buffered chunks for '%s'..." % [chunks.size(), context_id])
 			if chunks.size() > 0:
-				# Combine all MP3 chunks into one buffer
 				var combined = PackedByteArray()
 				for chunk in chunks:
 					combined.append_array(chunk)
 				
-				print("[ElevenLabs] 🔗 Combined %d chunks into %d bytes (MP3)" % [chunks.size(), combined.size()])
-				
-				# Create AudioStreamMP3 from combined data
 				var audio_stream = AudioStreamMP3.new()
 				audio_stream.data = combined
-				
-				# Emit high-level signal with ready-to-play stream
-				print("[ElevenLabs] ✅ Emitting audio_stream_ready for '%s'" % context_id)
 				audio_stream_ready.emit(audio_stream, context_id)
 			
-			# Clear collected chunks
 			collected_audio_chunks.erase(context_id)
 		
-		print("[ElevenLabs] ✅ Emitting synthesis_completed for '%s'" % context_id)
 		synthesis_completed.emit(context_id)
 	
+	# Error handling
 	if message.has("error"):
-		# Error message
-		print("[ElevenLabs] ❌ ERROR for context '%s': %s" % [context_id, str(message["error"])])
+		print("[ElevenLabs] ERROR: %s" % str(message["error"]))
 		synthesis_error.emit(context_id, message)
-	
-	# Log unknown messages for debugging
-	if not message.has("audio") and not message.has("isFinal") and not message.has("error") and not (message.has("message") and message["message"] == "Authentication successful"):
-		print("ElevenLabs: ⚠️ Unknown message for context ", context_id, ": ", message)
 
 ## Handle binary audio data
 func _handle_audio_data(context_id: String, audio_data: PackedByteArray) -> void:
@@ -804,9 +600,14 @@ class RealtimePCMPlayer extends Node:
 	var audio_queue: Array[PackedByteArray] = []
 	var queue_timer: Timer
 	var wrapper_ref  # Reference to ElevenLabsWrapper (for signals)
-	var prebuffer_threshold: int = 1  # Start playback immediately when first chunk arrives (handles both single and multi-chunk responses)
-	var is_prebuffered: bool = false  # Track if we've started playing
-	var synthesis_complete: bool = false  # Track if synthesis is done (to handle 1-chunk cases)
+	var prebuffer_threshold: int = 1
+	var is_prebuffered: bool = false
+	var synthesis_complete: bool = false
+	
+	# DIAGNOSTIC: Chunk tracking
+	var chunks_received_total: int = 0
+	var chunks_processed_total: int = 0
+	var playback_start_time: float = 0.0
 	
 	func _init(ctx_id: String, parent: Node, wrapper):
 		context_id = ctx_id
@@ -817,7 +618,7 @@ class RealtimePCMPlayer extends Node:
 		audio_player = AudioStreamPlayer.new()
 		audio_player.name = "Player_" + context_id
 		var generator = AudioStreamGenerator.new()
-		generator.mix_rate = PCM_SAMPLE_RATE
+		generator.mix_rate = PCM_SAMPLE_RATE  # 16kHz for PCM
 		generator.buffer_length = PCM_BUFFER_LENGTH
 		audio_player.stream = generator
 		add_child(audio_player)
@@ -838,6 +639,7 @@ class RealtimePCMPlayer extends Node:
 		# Now that we're in the tree, start playback and timer
 		audio_player.play()
 		queue_timer.start()
+		print("[DIAGNOSTIC] Timer STARTED - wait_time=%.3fs, one_shot=%s" % [queue_timer.wait_time, queue_timer.one_shot])
 		
 		# Get playback stream
 		playback = audio_player.get_stream_playback()
@@ -851,58 +653,40 @@ class RealtimePCMPlayer extends Node:
 		return true
 	
 	func _on_synthesis_complete(ctx_id: String):
-		print("[RealtimePCMPlayer] 🏁 Synthesis complete signal received for '%s' (my context: '%s')" % [ctx_id, context_id])
-		
 		if ctx_id != context_id:
-			print("[RealtimePCMPlayer] ❌ Context mismatch - ignoring")
 			return
 		
 		synthesis_complete = true
-		print("[RealtimePCMPlayer] 📊 State: is_prebuffered=%s, queue_size=%d" % [is_prebuffered, audio_queue.size()])
+		var elapsed = (Time.get_ticks_msec() / 1000.0) - playback_start_time
+		print("[DIAGNOSTIC] Synthesis COMPLETE - elapsed=%.1fs, received=%d, processed=%d, queue=%d" % [
+			elapsed, chunks_received_total, chunks_processed_total, audio_queue.size()
+		])
 		
 		# If synthesis is done and we have chunks but haven't started playing, start now!
 		if not is_prebuffered and not audio_queue.is_empty():
-			print("[RealtimePCMPlayer] 🎬 Synthesis complete with %d chunk(s) - starting playback immediately!" % audio_queue.size())
 			is_prebuffered = true
-		elif is_prebuffered:
-			print("[RealtimePCMPlayer] ✅ Already playing, continuing...")
-		else:
-			print("[RealtimePCMPlayer] ⚠️ No chunks to play!")
+			playback_start_time = Time.get_ticks_msec() / 1000.0
 	
 	func _on_audio_chunk(audio: PackedByteArray, ctx_id: String):
 		if ctx_id != context_id:
 			return
 		
-		print("[RealtimePCMPlayer] 📥 Chunk received for '%s' (%d bytes), queue size: %d -> %d" % [context_id, audio.size(), audio_queue.size(), audio_queue.size() + 1])
-		
-		# Always queue chunks (for prebuffering strategy)
+		chunks_received_total += 1
 		audio_queue.append(audio)
 		
-		# Check if this is the LAST chunk (isFinal already received)
-		# This happens when synthesis completes quickly with only 1-2 chunks
-		if not is_prebuffered and synthesis_complete:
-			print("[RealtimePCMPlayer] 🎬 Last chunk received (synthesis already complete) - starting playback immediately!")
+		# Start playback immediately when first chunk arrives
+		if not is_prebuffered and (audio_queue.size() >= prebuffer_threshold or synthesis_complete):
+			print("[DIAGNOSTIC] Playback STARTED - chunks_received=%d, queue=%d" % [chunks_received_total, audio_queue.size()])
 			is_prebuffered = true
-			return
-		
-		# Start playback once we have enough chunks prebuffered
-		if not is_prebuffered and audio_queue.size() >= prebuffer_threshold:
-			print("[RealtimePCMPlayer] 🎬 Prebuffer threshold reached (%d chunks) - starting playback!" % prebuffer_threshold)
-			is_prebuffered = true
-		elif not is_prebuffered:
-			print("[RealtimePCMPlayer] ⏳ Waiting for more chunks... (%d/%d)" % [audio_queue.size(), prebuffer_threshold])
+			playback_start_time = Time.get_ticks_msec() / 1000.0
 	
 	func _process_queue():
-		# Don't process until we've reached prebuffer threshold
-		if not is_prebuffered:
-			if not audio_queue.is_empty():
-				print("[RealtimePCMPlayer] ⏸️ Queue has %d chunks but not prebuffered yet" % audio_queue.size())
+		if not is_prebuffered or audio_queue.is_empty():
 			return
 		
-		if audio_queue.is_empty():
-			return
+		var chunks_processed_this_cycle = 0
+		var initial_queue_size = audio_queue.size()
 		
-		var chunks_processed = 0
 		while not audio_queue.is_empty():
 			var next_chunk = audio_queue[0]
 			var frames_needed = int(next_chunk.size() / 2.0)
@@ -911,15 +695,34 @@ class RealtimePCMPlayer extends Node:
 			if frames_available >= frames_needed:
 				var chunk = audio_queue.pop_front()
 				ElevenLabsWrapper.convert_pcm_to_frames(playback, chunk)
-				chunks_processed += 1
+				chunks_processed_total += 1
+				chunks_processed_this_cycle += 1
 			else:
-				# Only log if queue is stuck (not just waiting for buffer space)
-				if chunks_processed == 0 and audio_queue.size() > 5:
-					print("[RealtimePCMPlayer] ⚠️ Buffer full: need %d, have %d (queue: %d)" % [frames_needed, frames_available, audio_queue.size()])
 				break
 		
-		if chunks_processed > 0:
-			print("[RealtimePCMPlayer] ✅ Processed %d chunk(s), %d remaining" % [chunks_processed, audio_queue.size()])
+		# DIAGNOSTIC: Log each processing cycle
+		if chunks_processed_this_cycle > 0:
+			var elapsed = (Time.get_ticks_msec() / 1000.0) - playback_start_time
+			print("[DIAGNOSTIC] Processed %d chunks - elapsed=%.1fs, total=%d/%d, queue_now=%d" % [
+				chunks_processed_this_cycle, elapsed, chunks_processed_total, chunks_received_total, audio_queue.size()
+			])
+			
+			# Check if queue is empty
+			if audio_queue.is_empty() and synthesis_complete:
+				# Queue is empty but buffer still has audio playing!
+				# Calculate remaining audio in buffer and schedule completion signal
+				var frames_remaining = (PCM_SAMPLE_RATE * PCM_BUFFER_LENGTH) - playback.get_frames_available()
+				var seconds_remaining = float(frames_remaining) / float(PCM_SAMPLE_RATE)
+				print("[DIAGNOSTIC] Queue empty, scheduling playback_finished in %.1fs..." % (seconds_remaining + 0.5))
+				
+				# Can't use await in timer callback - use call_deferred with timer
+				var completion_timer = get_tree().create_timer(seconds_remaining + 0.5)
+				completion_timer.timeout.connect(func():
+					print("[DIAGNOSTIC] ✅ PLAYBACK FINISHED - All chunks played!")
+					wrapper_ref.playback_finished.emit(context_id)
+				)
+			elif audio_queue.is_empty() and not synthesis_complete:
+				print("[DIAGNOSTIC] ⚠️ Queue EMPTY but synthesis NOT complete")
 	
 	func get_queue_size() -> int:
 		return audio_queue.size()
@@ -928,6 +731,15 @@ class RealtimePCMPlayer extends Node:
 		return audio_queue.is_empty()
 	
 	func cleanup():
+		# DIAGNOSTIC: Final state
+		var elapsed = (Time.get_ticks_msec() / 1000.0) - playback_start_time
+		print("[DIAGNOSTIC] CLEANUP - elapsed=%.1fs, received=%d, processed=%d, remaining=%d" % [
+			elapsed, chunks_received_total, chunks_processed_total, audio_queue.size()
+		])
+		print("[DIAGNOSTIC] Player state: is_playing=%s, timer_running=%s" % [
+			audio_player.playing, queue_timer.is_stopped() == false
+		])
+		
 		if wrapper_ref:
 			if wrapper_ref.audio_chunk_ready.is_connected(_on_audio_chunk):
 				wrapper_ref.audio_chunk_ready.disconnect(_on_audio_chunk)

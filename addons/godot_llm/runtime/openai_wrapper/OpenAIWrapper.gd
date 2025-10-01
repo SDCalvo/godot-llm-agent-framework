@@ -465,6 +465,7 @@ func _process_sse_chunk(stream_id: String, text: String) -> void:
 	state["buffer"] = buffer
 
 func _handle_sse_event(stream_id: String, block: String) -> void:
+	print("[WRAPPER DEBUG] SSE event received for stream %s" % stream_id)
 	var data_lines: Array = []
 	var lines := block.split("\n")
 	for l in lines:
@@ -489,6 +490,7 @@ func _handle_sse_event(stream_id: String, block: String) -> void:
 	if typeof(obj) != TYPE_DICTIONARY:
 		return
 	var event_type := String(obj.get("type", ""))
+	print("[WRAPPER DEBUG] Parsed event type: '%s'" % event_type)
 	if event_type == "response.created":
 		var rid := String(obj.get("response", {}).get("id", obj.get("id", "")))
 		_streams[stream_id]["response_id"] = rid
@@ -511,6 +513,7 @@ func _handle_sse_event(stream_id: String, block: String) -> void:
 			delta_text_b = String(delta_val2.get("text", ""))
 		elif typeof(delta_val2) == TYPE_STRING:
 			delta_text_b = String(delta_val2)
+		print("[WRAPPER DEBUG] response.text.delta - text='%s'" % delta_text_b)
 		_streams[stream_id]["final_text"] = String(_streams[stream_id].get("final_text", "")) + delta_text_b
 		emit_signal("stream_delta_text", stream_id, delta_text_b)
 		return
@@ -560,8 +563,15 @@ func _handle_sse_event(stream_id: String, block: String) -> void:
 		else:
 			print("WRAPPER KEEPING STREAM: response.done with continuation pending, stream_id=", stream_id)
 		return
-	if event_type == "response.error":
-		emit_signal("stream_error", stream_id, obj.get("error", obj))
+	if event_type == "response.error" or event_type == "error":
+		var error_obj = obj.get("error", obj)
+		print("[WRAPPER ERROR] %s" % JSON.stringify(error_obj, "  "))
+		emit_signal("stream_error", stream_id, error_obj)
+		_streams.erase(stream_id)
+		return
+	if event_type == "response.failed":
+		print("[WRAPPER ERROR] response.failed: %s" % JSON.stringify(obj, "  "))
+		emit_signal("stream_error", stream_id, obj)
 		_streams.erase(stream_id)
 		return
 	# Initialize function call when item is added
