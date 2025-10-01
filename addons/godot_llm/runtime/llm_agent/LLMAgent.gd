@@ -3,42 +3,107 @@ class_name LLMAgent
 
 ## LLMAgent
 ##
-## Non‑autoload agent abstraction. Runs LLM turns using the configured
-## `OpenAIWrapper`, handling tool‑calling loops for both `invoke` (discrete)
-## and `ainvoke` (streaming). Tool handlers execute in parallel threads for
-## optimal performance when multiple tools are called simultaneously.
+## High-level agent abstraction for LLM interactions with tool calling, message
+## history, and parallel tool execution. Supports both discrete and streaming modes.
 ##
-## Key behaviors
-## - First turn: you call `invoke(messages)` or `ainvoke(messages)`.
-##   - The agent validates messages and enforces exactly one system message at
-##     index 0 (if present). If invalid (multiple system messages or system not
-##     at index 0), the agent returns an error.
-##   - If `hyper.system_prompt` or `system_prompt` is set and no system message
-##     is provided, the agent prepends one automatically.
-## - Tool execution: When the LLM requests tool calls, they are executed in
-##   parallel threads for maximum performance, then results are submitted back
-##   as continuations to complete the assistant's response.
-## - Continuations: within a single turn, only tool outputs are submitted via
-##   `submit_tool_outputs(response_id, ...)`. We do not resend messages.
-## - Interruption: call `interrupt()` to cancel the current run. Then
-##   `resume()`/`stream_resume()` to start a new turn with the internal
-##   `message_history`, or use `interrupt_with_invoke(messages)` /
-##   `interrupt_with_ainvoke(messages)` to cancel, append messages, and start a
-##   new turn immediately.
+## CREATION:
+##   # Via LLMManager (recommended)
+##   var agent = LLMManager.create_agent({
+##       "model": "gpt-4o-mini",
+##       "temperature": 0.7,
+##       "system_prompt": "You are a helpful NPC."
+##   }, tools_array)
 ##
-## Construction
-## - Via LLMManager (recommended): LLMManager.create_agent(hyper, tools)
-## - Direct: LLMAgent.create(tools, hyper)
-##   - `hyper` may include: { model, temperature, system_prompt, max_output_tokens }
+##   # Or directly
+##   var agent = LLMAgent.create(tools, {"model": "gpt-4o-mini"})
 ##
-## Examples
-## ```gdscript
-## var agent := LLMAgent.create([], {"model":"gpt-4o-mini", "system_prompt":"You are a merchant.", "max_output_tokens": 256})
-## var res := await agent.invoke(Message.user_simple("Greet the player."))
-## res = await agent.interrupt_with_invoke(Message.user_simple("Change topic: prices?"))
-## var run_id := agent.ainvoke(Message.user_simple("Stream a greeting."))
-## agent.delta.connect(func(id, d): if id==run_id: $Output.append_text(d))
-## ```
+## PARAMETERS (hyper dict):
+##   - model: "gpt-4o-mini", "gpt-4o", etc.
+##   - temperature: 0.0-2.0 (creativity, default: 1.0)
+##   - system_prompt: Sets agent personality/role
+##   - max_output_tokens: Limit response length (optional)
+##
+## MODES:
+##   1. invoke(messages) - Discrete mode (waits for complete response)
+##   2. ainvoke(messages) - Streaming mode (emits delta signals)
+##
+## EXAMPLE 1: Simple Q&A (No Tools)
+##   ```
+##   var agent = LLMAgent.create([], {"model": "gpt-4o-mini"})
+##   var result = await agent.invoke(Message.user_simple("What is 2+2?"))
+##   print(result["text"])  # "2+2 equals 4"
+##   ```
+##
+## EXAMPLE 2: Streaming Response
+##   ```
+##   var agent = LLMAgent.create([], {})
+##   agent.delta.connect(func(id, text): $Label.text += text)
+##   agent.finished.connect(func(id, ok, result): print("Done!"))
+##   agent.ainvoke(Message.user_simple("Tell me a story"))
+##   ```
+##
+## EXAMPLE 3: With Tools (Parallel Execution)
+##   ```
+##   # Create tools using builder
+##   LLMToolRegistry.builder("get_weather") \
+##       .describe("Get current weather") \
+##       .param("city", "string", "City name", true) \
+##       .handler(func(args): return {"temp": 72, "condition": "sunny"}) \
+##       .register()
+##   
+##   LLMToolRegistry.builder("calculate") \
+##       .describe("Perform calculation") \
+##       .param("expression", "string", "Math expression", true) \
+##       .handler(func(args): return {"result": 42}) \
+##       .register()
+##   
+##   # Create agent with tools
+##   var tools = LLMToolRegistry.get_all()
+##   var agent = LLMManager.create_agent({"model": "gpt-4o-mini"}, tools)
+##   
+##   # Agent can now call tools (executes in parallel!)
+##   var result = await agent.invoke(Message.user_simple(
+##       "What's the weather in Paris and what's 10 * 5?"
+##   ))
+##   # LLM calls both tools simultaneously, then responds with results
+##   ```
+##
+## EXAMPLE 4: Stream to TTS (LLM → Audio)
+##   ```
+##   var agent = LLMAgent.create([], {"system_prompt": "You are a wizard."})
+##   var player = await ElevenLabsWrapper.create_realtime_player(self, "npc")
+##   
+##   agent.delta.connect(func(id, text):
+##       ElevenLabsWrapper.feed_text_to_character("npc", text)
+##   )
+##   
+##   agent.finished.connect(func(id, ok, result):
+##       await ElevenLabsWrapper.finish_character_speech("npc")
+##   )
+##   
+##   agent.ainvoke(Message.user_simple("Greet the player"))
+##   ```
+##
+## SIGNALS:
+##   - delta(run_id, text): Text chunk received (streaming mode)
+##   - finished(run_id, ok, result): Turn complete
+##   - error(run_id, error): Error occurred
+##   - debug(run_id, event): Debug events (tool calls, etc.)
+##
+## TOOL EXECUTION:
+##   - Tools run in PARALLEL threads when multiple are called
+##   - Results submitted back to continue the response
+##   - Automatic retry loop until LLM provides final answer
+##
+## MESSAGE HISTORY:
+##   - agent.add_messages([...]) - Append to history
+##   - agent.get_history() - Get copy of history
+##   - agent.clear_history() - Reset conversation
+##
+## INTERRUPTION:
+##   - agent.interrupt() - Cancel current run
+##   - agent.resume() - Continue with history
+##   - agent.interrupt_with_ainvoke(messages) - Cancel and start new turn
 
 signal debug(run_id: String, event: Dictionary)
 signal delta(run_id: String, text_delta: String)

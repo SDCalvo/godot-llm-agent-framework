@@ -265,7 +265,6 @@ func _test_streaming_realtime() -> void:
 	
 	# ✨ SIMPLIFIED: Just feed text directly - batching is automatic!
 	var delta_handler = func(_run_id: String, text_delta: String):
-		print("[TEST DEBUG] delta_handler called - run_id='%s', delta='%s', len=%d" % [_run_id, text_delta, text_delta.length()])
 		if text_delta and text_delta.length() > 0:
 			log_info("   📝 LLM chunk: '" + text_delta + "'")
 			# Wrapper handles batching automatically! Just feed text.

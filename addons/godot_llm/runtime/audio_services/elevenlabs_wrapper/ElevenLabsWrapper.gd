@@ -1,18 +1,63 @@
 ## ElevenLabs Text-to-Speech Wrapper
 ## 
-## Provides REAL-TIME streaming TTS functionality using ElevenLabs WebSocket API
-## Supports multiple character contexts and real-time text-to-speech conversion
+## WebSocket-based real-time and buffered TTS using ElevenLabs stream-input API.
+## Supports both standalone usage and LLM integration with automatic text batching.
 ##
-## USAGE:
-##   # Optional: Change model (default is eleven_turbo_v2)
-##   ElevenLabsWrapper.set_model("eleven_multilingual_v2")
+## MODES:
+##   - BUFFERED (MP3): Collects all audio, plays when complete (~2-3s latency)
+##   - REAL_TIME (PCM): Plays chunks as they arrive (~100-500ms latency)
+##
+## STANDALONE USAGE (No LLM):
+##   ```
+##   # One-shot speech (BUFFERED)
+##   ElevenLabsWrapper.initialize("api_key", StreamingMode.BUFFERED)
+##   await ElevenLabsWrapper.create_character_context("npc1", "voice_id")
+##   ElevenLabsWrapper.speak_as_character("npc1", "Hello!")
+##   ElevenLabsWrapper.audio_stream_ready.connect(func(stream, ctx):
+##       player.stream = stream
+##       player.play()
+##   )
+##
+##   # Manual streaming (REAL_TIME)
+##   ElevenLabsWrapper.set_streaming_mode(StreamingMode.REAL_TIME)
+##   await ElevenLabsWrapper.create_character_context("npc1", "voice_id")
+##   var player = await ElevenLabsWrapper.create_realtime_player(self, "npc1")
+##   ElevenLabsWrapper.feed_text_to_character("npc1", "Hello there!")
+##   await ElevenLabsWrapper.finish_character_speech("npc1")
+##   # Wait for playback_finished signal before cleanup
+##   ```
+##
+## LLM INTEGRATION:
+##   ```
+##   # Stream LLM output → TTS (REAL_TIME)
+##   var player = await ElevenLabsWrapper.create_realtime_player(self, "npc1")
 ##   
-##   # Optional: Change streaming mode (default is BUFFERED)
-##   ElevenLabsWrapper.set_streaming_mode(ElevenLabsWrapper.StreamingMode.REAL_TIME)
+##   agent.delta.connect(func(id, text):
+##       ElevenLabsWrapper.feed_text_to_character("npc1", text)
+##   )
 ##   
-##   # Create context and speak
-##   ElevenLabsWrapper.create_character_context("character1", "voice_id")
-##   ElevenLabsWrapper.speak_as_character("character1", "Hello world!")
+##   agent.finished.connect(func(id, ok, result):
+##       # Flush remaining buffer
+##       var buf = ElevenLabsWrapper.character_contexts["npc1"]["batch_buffer"]
+##       if buf.length() > 0:
+##           ElevenLabsWrapper.feed_text_to_character("npc1", "", true)
+##       await ElevenLabsWrapper.finish_character_speech("npc1")
+##   )
+##   
+##   ElevenLabsWrapper.playback_finished.connect(func(ctx):
+##       player.cleanup()  # Safe to cleanup
+##   )
+##   
+##   agent.ainvoke(Message.user_simple("Hello!"))
+##   ```
+##
+## SIGNALS:
+##   - synthesis_completed(context_id): ElevenLabs finished generating (isFinal)
+##   - playback_finished(context_id): All audio played - SAFE TO CLEANUP
+##   - audio_chunk_ready(data, context_id): Raw PCM/MP3 bytes
+##   - audio_stream_ready(stream, context_id): AudioStreamMP3 (BUFFERED mode only)
+##
+## CRITICAL: Always wait for playback_finished before cleanup, NOT synthesis_completed!
 ##
 ## @tutorial: https://elevenlabs.io/docs/websockets
 
@@ -603,10 +648,6 @@ class RealtimePCMPlayer extends Node:
 	var prebuffer_threshold: int = 1
 	var is_prebuffered: bool = false
 	var synthesis_complete: bool = false
-	
-	# DIAGNOSTIC: Chunk tracking
-	var chunks_received_total: int = 0
-	var chunks_processed_total: int = 0
 	var playback_start_time: float = 0.0
 	
 	func _init(ctx_id: String, parent: Node, wrapper):
@@ -639,7 +680,6 @@ class RealtimePCMPlayer extends Node:
 		# Now that we're in the tree, start playback and timer
 		audio_player.play()
 		queue_timer.start()
-		print("[DIAGNOSTIC] Timer STARTED - wait_time=%.3fs, one_shot=%s" % [queue_timer.wait_time, queue_timer.one_shot])
 		
 		# Get playback stream
 		playback = audio_player.get_stream_playback()
@@ -657,10 +697,6 @@ class RealtimePCMPlayer extends Node:
 			return
 		
 		synthesis_complete = true
-		var elapsed = (Time.get_ticks_msec() / 1000.0) - playback_start_time
-		print("[DIAGNOSTIC] Synthesis COMPLETE - elapsed=%.1fs, received=%d, processed=%d, queue=%d" % [
-			elapsed, chunks_received_total, chunks_processed_total, audio_queue.size()
-		])
 		
 		# If synthesis is done and we have chunks but haven't started playing, start now!
 		if not is_prebuffered and not audio_queue.is_empty():
@@ -671,12 +707,10 @@ class RealtimePCMPlayer extends Node:
 		if ctx_id != context_id:
 			return
 		
-		chunks_received_total += 1
 		audio_queue.append(audio)
 		
 		# Start playback immediately when first chunk arrives
 		if not is_prebuffered and (audio_queue.size() >= prebuffer_threshold or synthesis_complete):
-			print("[DIAGNOSTIC] Playback STARTED - chunks_received=%d, queue=%d" % [chunks_received_total, audio_queue.size()])
 			is_prebuffered = true
 			playback_start_time = Time.get_ticks_msec() / 1000.0
 	
@@ -685,44 +719,30 @@ class RealtimePCMPlayer extends Node:
 			return
 		
 		var chunks_processed_this_cycle = 0
-		var initial_queue_size = audio_queue.size()
 		
 		while not audio_queue.is_empty():
 			var next_chunk = audio_queue[0]
-			var frames_needed = int(next_chunk.size() / 2.0)
+			var frames_needed = int(next_chunk.size() / 2.0)  # PCM is 2 bytes per sample
 			var frames_available = playback.get_frames_available()
 			
 			if frames_available >= frames_needed:
 				var chunk = audio_queue.pop_front()
 				ElevenLabsWrapper.convert_pcm_to_frames(playback, chunk)
-				chunks_processed_total += 1
 				chunks_processed_this_cycle += 1
 			else:
 				break
 		
-		# DIAGNOSTIC: Log each processing cycle
-		if chunks_processed_this_cycle > 0:
-			var elapsed = (Time.get_ticks_msec() / 1000.0) - playback_start_time
-			print("[DIAGNOSTIC] Processed %d chunks - elapsed=%.1fs, total=%d/%d, queue_now=%d" % [
-				chunks_processed_this_cycle, elapsed, chunks_processed_total, chunks_received_total, audio_queue.size()
-			])
+		# Check if playback is complete (queue empty + synthesis done)
+		if chunks_processed_this_cycle > 0 and audio_queue.is_empty() and synthesis_complete:
+			# Calculate remaining audio in buffer and schedule completion signal
+			var frames_remaining = (PCM_SAMPLE_RATE * PCM_BUFFER_LENGTH) - playback.get_frames_available()
+			var seconds_remaining = float(frames_remaining) / float(PCM_SAMPLE_RATE)
 			
-			# Check if queue is empty
-			if audio_queue.is_empty() and synthesis_complete:
-				# Queue is empty but buffer still has audio playing!
-				# Calculate remaining audio in buffer and schedule completion signal
-				var frames_remaining = (PCM_SAMPLE_RATE * PCM_BUFFER_LENGTH) - playback.get_frames_available()
-				var seconds_remaining = float(frames_remaining) / float(PCM_SAMPLE_RATE)
-				print("[DIAGNOSTIC] Queue empty, scheduling playback_finished in %.1fs..." % (seconds_remaining + 0.5))
-				
-				# Can't use await in timer callback - use call_deferred with timer
-				var completion_timer = get_tree().create_timer(seconds_remaining + 0.5)
-				completion_timer.timeout.connect(func():
-					print("[DIAGNOSTIC] ✅ PLAYBACK FINISHED - All chunks played!")
-					wrapper_ref.playback_finished.emit(context_id)
-				)
-			elif audio_queue.is_empty() and not synthesis_complete:
-				print("[DIAGNOSTIC] ⚠️ Queue EMPTY but synthesis NOT complete")
+			# Schedule playback_finished signal after buffer drains
+			var completion_timer = get_tree().create_timer(seconds_remaining + 0.5)
+			completion_timer.timeout.connect(func():
+				wrapper_ref.playback_finished.emit(context_id)
+			)
 	
 	func get_queue_size() -> int:
 		return audio_queue.size()
@@ -731,15 +751,6 @@ class RealtimePCMPlayer extends Node:
 		return audio_queue.is_empty()
 	
 	func cleanup():
-		# DIAGNOSTIC: Final state
-		var elapsed = (Time.get_ticks_msec() / 1000.0) - playback_start_time
-		print("[DIAGNOSTIC] CLEANUP - elapsed=%.1fs, received=%d, processed=%d, remaining=%d" % [
-			elapsed, chunks_received_total, chunks_processed_total, audio_queue.size()
-		])
-		print("[DIAGNOSTIC] Player state: is_playing=%s, timer_running=%s" % [
-			audio_player.playing, queue_timer.is_stopped() == false
-		])
-		
 		if wrapper_ref:
 			if wrapper_ref.audio_chunk_ready.is_connected(_on_audio_chunk):
 				wrapper_ref.audio_chunk_ready.disconnect(_on_audio_chunk)
