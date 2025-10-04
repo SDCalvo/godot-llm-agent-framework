@@ -9,6 +9,7 @@
 export.cfg
 export_credentials.cfg
 *.tmp
+*.tscn*.tmp
 
 # Imported translations (automatically generated from CSV files)
 *.translation
