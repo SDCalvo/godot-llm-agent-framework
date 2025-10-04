@@ -1,0 +1,156 @@
+[gd_scene load_steps=2 format=3 uid="uid://bvq7qm8yp0fxp"]
+
+[ext_resource type="Script" uid="uid://bfydegugxtobi" path="res://scenes/DeepgramTest.gd" id="1_deepgram_test"]
+
+[node name="DeepgramTest" type="Window"]
+oversampling_override = 1.0
+title = "Deepgram STT Test Suite"
+initial_position = 1
+size = Vector2i(900, 700)
+always_on_top = true
+script = ExtResource("1_deepgram_test")
+
+[node name="Panel" type="PanelContainer" parent="."]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="VBox" type="VBoxContainer" parent="Panel"]
+layout_mode = 2
+
+[node name="ModePanel" type="PanelContainer" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="ModeLabel" type="Label" parent="Panel/VBox/ModePanel"]
+layout_mode = 2
+text = "Mode: Deepgram Only"
+horizontal_alignment = 1
+
+[node name="ModeToggleBtn" type="Button" parent="Panel/VBox/ModePanel"]
+layout_mode = 2
+text = "Switch to Full Pipeline"
+
+[node name="HSeparator1" type="HSeparator" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="StatusPanel" type="PanelContainer" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="StatusLabel" type="Label" parent="Panel/VBox/StatusPanel"]
+layout_mode = 2
+text = "Status: Disconnected ⚫"
+horizontal_alignment = 1
+
+[node name="ControlPanel" type="HBoxContainer" parent="Panel/VBox"]
+layout_mode = 2
+alignment = 1
+
+[node name="ConnectBtn" type="Button" parent="Panel/VBox/ControlPanel"]
+layout_mode = 2
+text = "Connect"
+
+[node name="DisconnectBtn" type="Button" parent="Panel/VBox/ControlPanel"]
+layout_mode = 2
+disabled = true
+text = "Disconnect"
+
+[node name="TestAudioBtn" type="Button" parent="Panel/VBox/ControlPanel"]
+layout_mode = 2
+disabled = true
+text = "Send Test Audio"
+
+[node name="HSeparator2" type="HSeparator" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="TranscriptPanel" type="VBoxContainer" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="Panel/VBox/TranscriptPanel"]
+layout_mode = 2
+text = "Real-Time Transcript:"
+
+[node name="InterimLabel" type="Label" parent="Panel/VBox/TranscriptPanel"]
+layout_mode = 2
+text = "💭 Interim: (waiting for speech...)"
+
+[node name="ConfidenceBar" type="ProgressBar" parent="Panel/VBox/TranscriptPanel"]
+layout_mode = 2
+show_percentage = false
+
+[node name="ConfidenceLabel" type="Label" parent="Panel/VBox/TranscriptPanel"]
+layout_mode = 2
+text = "Confidence: 0.0%"
+
+[node name="HSeparator3" type="HSeparator" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="VADPanel" type="PanelContainer" parent="Panel/VBox"]
+visible = false
+layout_mode = 2
+
+[node name="VBox" type="VBoxContainer" parent="Panel/VBox/VADPanel"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="Panel/VBox/VADPanel/VBox"]
+layout_mode = 2
+text = "Voice Activity Detection:"
+horizontal_alignment = 1
+
+[node name="VADStatusLabel" type="Label" parent="Panel/VBox/VADPanel/VBox"]
+layout_mode = 2
+text = "VAD: Not Setup"
+horizontal_alignment = 1
+
+[node name="VADControlPanel" type="HBoxContainer" parent="Panel/VBox/VADPanel/VBox"]
+layout_mode = 2
+alignment = 1
+
+[node name="VADStartBtn" type="Button" parent="Panel/VBox/VADPanel/VBox/VADControlPanel"]
+layout_mode = 2
+disabled = true
+text = "Start VAD"
+
+[node name="VADStopBtn" type="Button" parent="Panel/VBox/VADPanel/VBox/VADControlPanel"]
+layout_mode = 2
+disabled = true
+text = "Stop VAD"
+
+[node name="HSeparator" type="HSeparator" parent="Panel/VBox/VADPanel/VBox"]
+layout_mode = 2
+
+[node name="Label2" type="Label" parent="Panel/VBox/VADPanel/VBox"]
+layout_mode = 2
+text = "Agent Response:"
+horizontal_alignment = 1
+
+[node name="AgentResponseLabel" type="Label" parent="Panel/VBox/VADPanel/VBox"]
+layout_mode = 2
+text = "Agent: (waiting for input...)"
+horizontal_alignment = 1
+autowrap_mode = 3
+
+[node name="HSeparator4" type="HSeparator" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="FinalLogPanel" type="VBoxContainer" parent="Panel/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="HBox" type="HBoxContainer" parent="Panel/VBox/FinalLogPanel"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="Panel/VBox/FinalLogPanel/HBox"]
+layout_mode = 2
+text = "Complete Transcripts & Log:"
+
+[node name="ClearLogBtn" type="Button" parent="Panel/VBox/FinalLogPanel"]
+layout_mode = 2
+text = "Clear Log"
+
+[node name="FinalLog" type="TextEdit" parent="Panel/VBox/FinalLogPanel"]
+layout_mode = 2
+size_flags_vertical = 3
+editable = false
+wrap_mode = 1

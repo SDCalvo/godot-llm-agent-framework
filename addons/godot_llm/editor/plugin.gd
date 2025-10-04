@@ -9,12 +9,13 @@ extends EditorPlugin
 ## globally without manual setup.
 
 const AUTOLOADS : Array[Dictionary] = [
-    {"name": "LLMManager", "path": "res://addons/godot_llm/runtime/llm_manager/LLMManager.gd"},
-    {"name": "LLMToolRegistry", "path": "res://addons/godot_llm/runtime/llm_tool_registry/LLMToolRegistry.gd"},
-    {"name": "LLMEmailManager", "path": "res://addons/godot_llm/runtime/llm_email_manager/LLMEmailManager.gd"},
-    # Audio Services
-    {"name": "AudioManager", "path": "res://addons/godot_llm/runtime/audio_services/audio_manager/AudioManager.gd"},
-    {"name": "ElevenLabsWrapper", "path": "res://addons/godot_llm/runtime/audio_services/elevenlabs_wrapper/ElevenLabsWrapper.gd"},
+	{"name": "LLMManager", "path": "res://addons/godot_llm/runtime/llm_manager/LLMManager.gd"},
+	{"name": "LLMToolRegistry", "path": "res://addons/godot_llm/runtime/llm_tool_registry/LLMToolRegistry.gd"},
+	{"name": "LLMEmailManager", "path": "res://addons/godot_llm/runtime/llm_email_manager/LLMEmailManager.gd"},
+	# Audio Services
+	{"name": "AudioManager", "path": "res://addons/godot_llm/runtime/audio_services/audio_manager/AudioManager.gd"},
+	{"name": "ElevenLabsWrapper", "path": "res://addons/godot_llm/runtime/audio_services/elevenlabs_wrapper/ElevenLabsWrapper.gd"},
+	{"name": "DeepgramSTT", "path": "res://addons/godot_llm/runtime/audio_services/deepgram_stt/DeepgramSTT.gd"},
 ]
 
 # Legacy autoload names/paths from early versions to clean up automatically.

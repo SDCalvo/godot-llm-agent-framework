@@ -7,6 +7,7 @@ const MessageClass = preload("res://addons/godot_llm/runtime/llm_messages/LLMMes
 const EmailSystemTest = preload("res://scenes/EmailSystemTest.gd")
 const AsyncEmailTest = preload("res://scenes/AsyncEmailTest.gd")
 const VADTest = preload("res://scenes/VADTest.tscn")
+const DeepgramTest = preload("res://scenes/DeepgramTest.tscn")
 
 # Core components
 var wrapper: OpenAIWrapper
@@ -15,6 +16,7 @@ var demo_tools: Array = []
 var email_test: EmailSystemTest
 var async_email_test: AsyncEmailTest
 var vad_test: Window
+var deepgram_test: Window
 
 # UI references
 var console_output: RichTextLabel
@@ -34,6 +36,7 @@ var email_test_btn: Button
 var async_email_test_btn: Button
 var tts_test_btn: Button
 var vad_test_btn: Button
+var deepgram_test_btn: Button
 
 # Test scripts
 var tts_test: Node
@@ -88,6 +91,7 @@ func _setup_ui_references() -> void:
 	async_email_test_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/AsyncEmailTestBtn"
 	tts_test_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/TTSTestBtn"
 	vad_test_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/VADTestBtn"
+	deepgram_test_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/DeepgramTestBtn"
 	
 	# Connect console controls
 	clear_btn.pressed.connect(func(): console_output.text = "")
@@ -272,6 +276,7 @@ func _connect_test_buttons() -> void:
 	async_email_test_btn.pressed.connect(_test_async_email_system)
 	tts_test_btn.pressed.connect(_test_tts_system)
 	vad_test_btn.pressed.connect(_test_vad_system)
+	deepgram_test_btn.pressed.connect(_test_deepgram_system)
 
 # =============================================================================
 # TEST FUNCTIONS
@@ -577,3 +582,26 @@ func _test_vad_system() -> void:
 	# Make sure window is visible and on top
 	vad_test.show()
 	vad_test.move_to_foreground()
+
+func _test_deepgram_system() -> void:
+	log_test("🎤 Opening Deepgram STT Test Window...")
+	
+	# Create Deepgram test if not already created
+	if deepgram_test == null:
+		deepgram_test = DeepgramTest.instantiate()
+		get_tree().root.add_child(deepgram_test)
+		
+		# Connect close signal to cleanup
+		deepgram_test.close_requested.connect(func():
+			deepgram_test.queue_free()
+			deepgram_test = null
+		)
+		
+		log_success("✅ Deepgram Test window opened!")
+	else:
+		log_info("ℹ️ Deepgram Test window already open - bringing to front")
+		deepgram_test.grab_focus()
+	
+	# Make sure window is visible and on top
+	deepgram_test.show()
+	deepgram_test.move_to_foreground()

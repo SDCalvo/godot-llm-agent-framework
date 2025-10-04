@@ -93,6 +93,7 @@ func zoom_camera(zoom_delta):
 "
 
 [node name="Test" type="Node2D"]
+position = Vector2(0, -1)
 
 [node name="Camera2D" type="Camera2D" parent="."]
 script = SubResource("GDScript_1")
@@ -119,10 +120,10 @@ layout_mode = 1
 anchors_preset = 1
 anchor_left = 1.0
 anchor_right = 1.0
-offset_left = -532.0
-offset_top = 488.0
-offset_right = -2.0
-offset_bottom = 598.0
+offset_left = -561.0
+offset_top = 451.0
+offset_right = -1.0
+offset_bottom = 601.0
 grow_horizontal = 0
 
 [node name="ButtonGrid" type="GridContainer" parent="TestUI/UIContainer/TestButtonsPanel"]
@@ -185,6 +186,10 @@ text = "TTS Test"
 [node name="VADTestBtn" type="Button" parent="TestUI/UIContainer/TestButtonsPanel/ButtonGrid"]
 layout_mode = 2
 text = "VAD Test"
+
+[node name="DeepgramTestBtn" type="Button" parent="TestUI/UIContainer/TestButtonsPanel/ButtonGrid"]
+layout_mode = 2
+text = "Deepgram STT Test"
 
 [node name="OutputConsole" type="Panel" parent="TestUI/UIContainer"]
 layout_mode = 1

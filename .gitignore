@@ -21,3 +21,5 @@ mono_crash.*.json
 
 # Local environment (do not commit secrets)
 .env
+
+DEEPGRAM_RESEARCH.md
