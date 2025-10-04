@@ -28,7 +28,7 @@ var audio_stream_microphone: AudioStreamMicrophone
 var audio_stream_player: AudioStreamPlayer
 var audio_effect_capture: AudioEffectCapture
 
-## Voice processing integration (VAD handled by OpenAISTT via OpenAI Realtime API)
+## Voice processing integration (VAD now handled by TwoVoip plugin)
 var voice_processing_enabled: bool = false
 
 ## Internal state
@@ -58,7 +58,7 @@ func _setup_audio_nodes() -> void:
 	# Setup audio effect capture for real-time input
 	audio_effect_capture = AudioEffectCapture.new()
 
-# VAD functionality moved to OpenAISTT via OpenAI Realtime API
+# VAD functionality handled by TwoVoip plugin
 
 ## Setup timer for audio chunk capture
 func _setup_capture_timer() -> void:
@@ -78,7 +78,7 @@ func start_voice_pipeline() -> void:
 	# Start audio capture
 	start_audio_capture()
 	
-	# VAD detection handled by OpenAISTT via OpenAI Realtime API
+	# VAD detection handled by TwoVoip plugin
 	
 	print("Voice pipeline started")
 
@@ -92,7 +92,7 @@ func stop_voice_pipeline() -> void:
 	
 	# Stop components
 	stop_audio_capture()
-	# VAD stopping handled by OpenAISTT
+	# VAD stopping handled by TwoVoip plugin
 	
 	print("Voice pipeline stopped")
 
@@ -178,7 +178,7 @@ func _on_capture_timer_timeout() -> void:
 	# Emit the chunk
 	audio_input_chunk.emit(audio_chunk)
 	
-	# VAD processing now handled by OpenAISTT via OpenAI Realtime API
+	# VAD processing now handled by TwoVoip plugin
 
 ## Internal: Handle speech started
 func _on_speech_started() -> void:
@@ -239,4 +239,4 @@ func _exit_tree():
 	if audio_stream_player:
 		audio_stream_player.queue_free()
 	
-	# VAD cleanup handled by OpenAISTT
+	# VAD cleanup handled by TwoVoip plugin

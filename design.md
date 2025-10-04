@@ -165,35 +165,61 @@ A comprehensive LLM integration plugin for Godot 4 that provides OpenAI Response
   - Signal-based event handling
   - Resource management helpers
 
-#### 5. **Audio Services (TTS/STT)** - ✅ **Architecture Complete**
+#### 5. **Audio Services (Voice Pipeline)** - 🔨 **In Active Development**
 
 - **Priority**: High (Implementation In Progress)
-- **Description**: Pure component-based audio processing services
-- **Status**: ✅ **Design Complete, Implementation 80% Done**
+- **Description**: Modular voice conversation pipeline using best-in-class services
+- **Status**: 🔨 **TTS Complete, STT/VAD In Progress**
 
 **🎯 Core Design Principles:**
 
-- **Pure Data Processors**: Components transform data streams without handling I/O devices
-- **User Controls Audio I/O**: Users handle microphone/speaker devices however they want
+- **Best Tool for Each Job**: TwoVoip (VAD) + Deepgram (STT) + ElevenLabs (TTS)
+- **Cost Optimized**: Local VAD (free) + Cheapest STT (Deepgram 14x cheaper than OpenAI)
 - **Modular Pipeline**: Each component does one thing, connects via signals
+- **User Controls Audio I/O**: Users handle microphone/speaker devices however they want
 - **Agent Unchanged**: Existing LLMAgent works perfectly as-is
 
-**🔗 Component Pipeline:**
+**🔗 Voice Pipeline Architecture:**
 
 ```
-Audio Stream → OpenAI STT → Complete Text → LLM Agent → Text Stream → ElevenLabs TTS → Audio Stream
+Microphone (Godot)
+    ↓ Raw audio stream
+VADManager (TwoVoip wrapper)
+    ↓ Only when speech detected (saves $ on silence!)
+DeepgramSTT (WebSocket streaming)
+    ↓ Transcribed text
+LLMAgent (Your existing agent)
+    ↓ AI response text (streaming)
+ElevenLabsWrapper (WebSocket streaming)
+    ↓ Audio output
+Speakers (Godot)
 ```
 
-**📋 Implemented Components:**
+**📋 Component Status:**
 
-1. **OpenAI STT Service** (`OpenAISTT`) - ✅ **Complete**
-   - Uses OpenAI Realtime API with WebSocket streaming
-   - Built-in VAD (Voice Activity Detection) with configurable thresholds
-   - Provides both streaming deltas and complete transcriptions
-   - Supports multiple models: `gpt-4o-transcribe`, `whisper-1`, `gpt-4o-mini-transcribe`
-   - Noise reduction (near-field/far-field)
-   - Language hints and custom prompts
-2. **ElevenLabs TTS Service** (`ElevenLabsWrapper`) - ✅ **WebSocket Streaming Complete**
+1. **VADManager** (TwoVoip wrapper) - 🔨 **In Progress**
+
+   - Wraps TwoVoip GDExtension for easy use
+   - Local voice activity detection (free!)
+   - Two detection modes:
+     - Simple amplitude VAD (`chunk_max()`)
+     - AI-powered speech probability (`denoise_resampled_chunk()`)
+   - RnNoise denoising included
+   - Emits: `speech_started`, `speech_ended`, `audio_chunk`
+   - Rolling audio buffer (captures speech start)
+
+2. **DeepgramSTT** - ⏳ **Planned**
+
+   - WebSocket-based real-time transcription
+   - Multi-context support (multiple NPCs)
+   - Partial + Final transcriptions
+   - Cost: $0.0043/min (14x cheaper than OpenAI!)
+   - Latency: 100-300ms (faster than OpenAI!)
+   - Features: timestamps, confidence scores, custom vocabulary
+   - Methods: `create_context()`, `send_audio_chunk()`, `destroy_context()`
+   - Signals: `transcription_partial`, `transcription_final`, `error`
+
+3. **ElevenLabsWrapper** - ✅ **Complete**
    - Real-time WebSocket streaming via Multi-Context API
    - Per-character context management for simultaneous speech
    - Voice selection and voice settings configuration
@@ -201,21 +227,36 @@ Audio Stream → OpenAI STT → Complete Text → LLM Agent → Text Stream → 
      - **BUFFERED** (default): MP3 format, collect-and-play (lower latency impact, smoother playback)
      - **REAL_TIME**: PCM format, play-as-received (lowest latency, requires AudioStreamGenerator)
    - Methods: `create_character_context()`, `speak_as_character()`, `feed_text_to_character()`, `finish_character_speech()`, `destroy_character_context()`, `set_streaming_mode()`
-3. **Audio Manager** - ❌ **Removed by Design**
-   - Decided against centralized audio I/O management
-   - Users handle their own microphone/speaker integration
-   - Keeps services pure and flexible
 
-**🎤 STT Usage Pattern:**
+**🎤 Voice Pipeline Usage:**
 
 ```gdscript
-# User provides audio from any source
-func _on_user_audio(audio: PackedByteArray):
-    OpenAISTT.send_audio_chunk(audio, session_id)
+# Setup VAD
+var vad_manager = VADManager.new()
+add_child(vad_manager)
 
-# STT provides complete text when speech ends (VAD detection)
-OpenAISTT.transcription_completed.connect(func(text, session_id):
-    agent.ainvoke(Message.user_simple(text)))  # Send complete utterance to agent
+# Setup Deepgram STT
+await DeepgramSTT.create_context("player", api_key)
+
+# Connect VAD → Deepgram
+vad_manager.speech_started.connect(func():
+    print("Speech detected, starting STT")
+)
+
+vad_manager.audio_chunk.connect(func(audio: PackedByteArray):
+    DeepgramSTT.send_audio_chunk(audio, "player")
+)
+
+# Connect Deepgram → LLM Agent
+DeepgramSTT.transcription_final.connect(func(text: String, context_id: String):
+    print("User said: ", text)
+    agent.ainvoke(Message.user_simple(text))
+)
+
+# Connect Agent → ElevenLabs TTS
+agent.delta.connect(func(run_id: String, text: String):
+    ElevenLabsWrapper.feed_text_to_character("npc", text)
+)
 ```
 
 **🔊 TTS Usage Pattern:**
@@ -296,15 +337,33 @@ ElevenLabsWrapper provides helpers for easy integration:
 
 **⚙️ Voice Activity Detection (VAD):**
 
-- OpenAI Realtime API provides sophisticated server-side VAD
-- Eliminates need for custom VAD implementation
-- Configurable sensitivity, padding, and silence detection
-- Signals: `speech_started`, `speech_stopped`, `transcription_completed`
-- VAD solves the "when to invoke agent" problem automatically
+**Architecture:** Local VAD (TwoVoip) → Only stream to Deepgram when speech detected
+
+**Benefits:**
+
+- **Cost Savings:** Stream to cloud only when speaking (not during silence)
+- **No API Cost:** VAD runs locally for free
+- **Fast:** TwoVoip GDExtension runs at native speed
+- **Two Modes:**
+  - Simple: Amplitude-based detection (`chunk_max()`)
+  - Advanced: AI-powered speech probability with denoising
+
+**Implementation:**
+
+```gdscript
+# VADManager handles TwoVoip integration
+var vad = VADManager.new()
+vad.speech_started.connect(func():
+    # Start streaming to Deepgram
+)
+vad.speech_ended.connect(func():
+    # Stop streaming, save costs
+)
+```
 
 **🔑 API Key Management:**
 
-- Environment variables: `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`
+- Environment variables: `DEEPGRAM_API_KEY`, `ELEVENLABS_API_KEY`
 - Fallback to `.env` file support
 - Consistent initialization pattern across all services
 - Graceful degradation with warnings if keys missing

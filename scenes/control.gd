@@ -6,6 +6,7 @@ const LLMToolClass = preload("res://addons/godot_llm/runtime/llm_tools/LLMTool.g
 const MessageClass = preload("res://addons/godot_llm/runtime/llm_messages/LLMMessage.gd")
 const EmailSystemTest = preload("res://scenes/EmailSystemTest.gd")
 const AsyncEmailTest = preload("res://scenes/AsyncEmailTest.gd")
+const VADTest = preload("res://scenes/VADTest.tscn")
 
 # Core components
 var wrapper: OpenAIWrapper
@@ -13,6 +14,7 @@ var agent: LLMAgent
 var demo_tools: Array = []
 var email_test: EmailSystemTest
 var async_email_test: AsyncEmailTest
+var vad_test: Control
 
 # UI references
 var console_output: RichTextLabel
@@ -31,6 +33,7 @@ var random_color_btn: Button
 var email_test_btn: Button
 var async_email_test_btn: Button
 var tts_test_btn: Button
+var vad_test_btn: Button
 
 # Test scripts
 var tts_test: Node
@@ -84,6 +87,7 @@ func _setup_ui_references() -> void:
 	email_test_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/EmailTestBtn"
 	async_email_test_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/AsyncEmailTestBtn"
 	tts_test_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/TTSTestBtn"
+	vad_test_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/VADTestBtn"
 	
 	# Connect console controls
 	clear_btn.pressed.connect(func(): console_output.text = "")
@@ -217,16 +221,8 @@ func _setup_agent() -> void:
 func _setup_audio_services() -> void:
 	log_info("🎤 Setting up audio services...")
 	
-	# Setup OpenAI STT
-	var openai_key := OS.get_environment("OPENAI_API_KEY")
-	if openai_key == "":
-		openai_key = _load_env_key("OPENAI_API_KEY")
-	
-	if openai_key != "":
-		OpenAISTT.initialize(openai_key)
-		log_success("✅ OpenAI STT configured")
-	else:
-		log_warning("⚠️ OpenAI STT not configured - missing OPENAI_API_KEY")
+	# Audio services now use TwoVoip (VAD) + Deepgram (STT) + ElevenLabs (TTS)
+	# No initialization needed here - services are autoloaded
 	
 	# Setup ElevenLabs TTS
 	var elevenlabs_key := OS.get_environment("ELEVENLABS_API_KEY")
@@ -275,6 +271,7 @@ func _connect_test_buttons() -> void:
 	email_test_btn.pressed.connect(_test_email_system)
 	async_email_test_btn.pressed.connect(_test_async_email_system)
 	tts_test_btn.pressed.connect(_test_tts_system)
+	vad_test_btn.pressed.connect(_test_vad_system)
 
 # =============================================================================
 # TEST FUNCTIONS
@@ -557,3 +554,17 @@ func _test_tts_system() -> void:
 		await tts_test.run_tts_test(console_output)
 	else:
 		log_error("❌ TTS test not initialized")
+
+func _test_vad_system() -> void:
+	log_test("🎤 Opening VAD Test Window...")
+	
+	# Create VAD test if not already created
+	if vad_test == null:
+		vad_test = VADTest.instantiate()
+		get_tree().root.add_child(vad_test)
+		log_success("✅ VAD Test window opened!")
+	else:
+		log_info("ℹ️ VAD Test window already open")
+	
+	# Bring window to front
+	vad_test.show()

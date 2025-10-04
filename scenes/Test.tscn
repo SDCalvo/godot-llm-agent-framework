@@ -182,6 +182,10 @@ text = "Async Email Test"
 layout_mode = 2
 text = "TTS Test"
 
+[node name="VADTestBtn" type="Button" parent="TestUI/UIContainer/TestButtonsPanel/ButtonGrid"]
+layout_mode = 2
+text = "VAD Test"
+
 [node name="OutputConsole" type="Panel" parent="TestUI/UIContainer"]
 layout_mode = 1
 anchors_preset = 12

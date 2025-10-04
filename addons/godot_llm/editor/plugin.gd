@@ -5,8 +5,8 @@ extends EditorPlugin
 ##
 ## Registers autoload singletons on enable and removes them on disable. This
 ## ensures projects that enable the plugin get `LLMManager`, `LLMToolRegistry`,
-## `LLMEmailManager`, and audio services (`AudioManager`, `ElevenLabsWrapper`, 
-## `OpenAISTT`) globally without manual setup.
+## `LLMEmailManager`, and audio services (`AudioManager`, `ElevenLabsWrapper`) 
+## globally without manual setup.
 
 const AUTOLOADS : Array[Dictionary] = [
     {"name": "LLMManager", "path": "res://addons/godot_llm/runtime/llm_manager/LLMManager.gd"},
@@ -15,7 +15,6 @@ const AUTOLOADS : Array[Dictionary] = [
     # Audio Services
     {"name": "AudioManager", "path": "res://addons/godot_llm/runtime/audio_services/audio_manager/AudioManager.gd"},
     {"name": "ElevenLabsWrapper", "path": "res://addons/godot_llm/runtime/audio_services/elevenlabs_wrapper/ElevenLabsWrapper.gd"},
-    {"name": "OpenAISTT", "path": "res://addons/godot_llm/runtime/audio_services/openai_stt/OpenAISTT.gd"},
 ]
 
 # Legacy autoload names/paths from early versions to clean up automatically.
@@ -23,8 +22,9 @@ const LEGACY_AUTOLOAD_NAMES := [
     "ToolRegistry",
     "BoardManager",
     "LLMBoardManager",  # Renamed to LLMEmailManager
-    "WhisperWrapper",   # Renamed to OpenAISTT
-    "VADDetector",      # Removed - VAD now handled by OpenAISTT
+    "WhisperWrapper",   # Removed - replaced by Deepgram
+    "VADDetector",      # Removed - replaced by TwoVoip
+    "OpenAISTT",        # Removed - replaced by TwoVoip + Deepgram
 ]
 
 func _enter_tree() -> void:

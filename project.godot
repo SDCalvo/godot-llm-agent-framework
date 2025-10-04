@@ -15,6 +15,10 @@ run/main_scene="uid://cddqpilyalv2x"
 config/features=PackedStringArray("4.5", "Forward Plus")
 config/icon="res://icon.svg"
 
+[audio]
+
+driver/enable_input=true
+
 [autoload]
 
 LLMManager="*res://addons/godot_llm/runtime/llm_manager/LLMManager.gd"
@@ -22,7 +26,6 @@ LLMToolRegistry="*res://addons/godot_llm/runtime/llm_tool_registry/LLMToolRegist
 LLMEmailManager="*res://addons/godot_llm/runtime/llm_email_manager/LLMEmailManager.gd"
 AudioManager="*res://addons/godot_llm/runtime/audio_services/audio_manager/AudioManager.gd"
 ElevenLabsWrapper="*res://addons/godot_llm/runtime/audio_services/elevenlabs_wrapper/ElevenLabsWrapper.gd"
-OpenAISTT="*res://addons/godot_llm/runtime/audio_services/openai_stt/OpenAISTT.gd"
 
 [display]
 
