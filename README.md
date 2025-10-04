@@ -11,6 +11,33 @@
 
 ---
 
+## 📑 Table of Contents
+
+- [Features](#-features)
+- [Installation](#-installation)
+- [Quick Start](#-quick-start)
+  - [Example 1: Simple Q&A](#example-1-simple-qa)
+  - [Example 2: Streaming Response](#example-2-streaming-response)
+  - [Example 3: Tool Calling](#example-3-tool-calling)
+  - [Example 4: Voice Input (VAD)](#example-4-voice-input-vad)
+  - [Example 5: Voice Output (TTS)](#example-5-voice-output-tts)
+  - [Example 6: Complete Voice Pipeline](#example-6-complete-voice-pipeline-multi-npc)
+- [Core Components](#core-components)
+  - [1. LLM Integration](#-1-llm-integration)
+  - [2. Tool Calling](#️-2-tool-calling)
+  - [3. Multi-Agent Communication](#-3-multi-agent-communication)
+  - [4. Voice Activity Detection](#-4-voice-activity-detection-vad)
+  - [5. Text-to-Speech](#-5-text-to-speech-elevenlabs)
+  - [6. Speech-to-Text (Coming Soon)](#-6-speech-to-text-deepgram---coming-soon)
+- [Architecture](#️-architecture)
+- [Testing](#-testing)
+- [Roadmap](#-roadmap)
+- [Performance](#-performance)
+- [Known Limitations](#️-known-limitations)
+- [License](#-license)
+
+---
+
 ## ✨ Features
 
 - ✅ **OpenAI API Integration** - Streaming & non-streaming responses
@@ -65,6 +92,8 @@ For Voice Activity Detection:
 4. Restart Godot
 
 ---
+
+## Core Components
 
 ## 🧠 1. LLM Integration
 
@@ -591,7 +620,9 @@ deepgram.stream_audio(pcm_data)  # From VAD
 
 ---
 
-## 📋 Complete Examples
+## 📋 Quick Start
+
+Complete working examples:
 
 ### Example 1: Simple Q&A
 
