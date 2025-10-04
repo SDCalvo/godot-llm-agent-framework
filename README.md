@@ -60,7 +60,14 @@
 
 ### Step 2: Configure API Keys
 
-Create a `.env` file in your project root:
+Copy `env.example` to `.env` and fill in your API keys:
+
+```bash
+cp env.example .env
+# Then edit .env with your actual API keys
+```
+
+**Example `.env` file:**
 
 ```env
 OPENAI_API_KEY=sk-...
