@@ -14,7 +14,7 @@ var agent: LLMAgent
 var demo_tools: Array = []
 var email_test: EmailSystemTest
 var async_email_test: AsyncEmailTest
-var vad_test: Control
+var vad_test: Window
 
 # UI references
 var console_output: RichTextLabel
@@ -562,9 +562,18 @@ func _test_vad_system() -> void:
 	if vad_test == null:
 		vad_test = VADTest.instantiate()
 		get_tree().root.add_child(vad_test)
+		
+		# Connect close signal to cleanup
+		vad_test.close_requested.connect(func():
+			vad_test.queue_free()
+			vad_test = null
+		)
+		
 		log_success("✅ VAD Test window opened!")
 	else:
-		log_info("ℹ️ VAD Test window already open")
+		log_info("ℹ️ VAD Test window already open - bringing to front")
+		vad_test.grab_focus()
 	
-	# Bring window to front
+	# Make sure window is visible and on top
 	vad_test.show()
+	vad_test.move_to_foreground()

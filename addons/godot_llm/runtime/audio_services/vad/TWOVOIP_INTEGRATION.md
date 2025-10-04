@@ -42,7 +42,7 @@ opuschunked.undrop_chunk() -> bool
 # Force resampling (called automatically by denoise_resampled_chunk)
 opuschunked.resampled_current_chunk()
 
-# Reset encoder state after gaps
+# Reset encoder state after gaps (clearbuffers: true = clear internal buffers)
 opuschunked.resetencoder(clearbuffers: bool)
 ```
 
@@ -71,6 +71,7 @@ opuschunked.opusoptimizeforvoice = true
 ### PackedVector2Array to PCM
 
 TwoVoip returns audio as `PackedVector2Array` where each `Vector2` represents one stereo sample:
+
 - `Vector2.x` = left channel (float, range [-1.0, 1.0])
 - `Vector2.y` = right channel (float, range [-1.0, 1.0])
 
@@ -80,18 +81,18 @@ To convert to 16-bit PCM mono for Deepgram:
 func convert_to_pcm_mono(frames: PackedVector2Array) -> PackedByteArray:
     var pcm = PackedByteArray()
     pcm.resize(frames.size() * 2)  # 2 bytes per sample
-    
+
     for i in range(frames.size()):
         # Convert stereo to mono
         var mono = (frames[i].x + frames[i].y) / 2.0
-        
+
         # Convert float [-1.0, 1.0] to int16 [-32768, 32767]
         var sample_int = int(clamp(mono * 32767.0, -32768.0, 32767.0))
-        
+
         # Write little-endian
         pcm[i * 2] = sample_int & 0xFF
         pcm[i * 2 + 1] = (sample_int >> 8) & 0xFF
-    
+
     return pcm
 ```
 
@@ -103,19 +104,19 @@ func convert_to_pcm_mono(frames: PackedVector2Array) -> PackedByteArray:
 while opuschunked.chunk_available():
     # 1. Run AI-powered VAD + denoising
     var speech_prob = opuschunked.denoise_resampled_chunk()
-    
+
     if speech_prob >= vad_threshold:
         if not is_speech_active:
             # Speech just started - roll back to capture beginning
             opuschunked.undrop_chunk()
             is_speech_active = true
-        
+
         # 2. Get denoised 48kHz audio
         var frames = opuschunked.read_chunk(true)  # resampled=true
-        
+
         # 3. Convert to PCM for Deepgram
         var pcm = convert_to_pcm_mono(frames)
-        
+
         # 4. Stream to STT service
         stream_to_stt(pcm)
     else:
@@ -123,7 +124,7 @@ while opuschunked.chunk_available():
         silence_frames += 1
         if silence_frames > grace_period_frames:
             is_speech_active = false
-    
+
     # 5. Advance to next chunk
     opuschunked.drop_chunk()
 ```
@@ -170,6 +171,7 @@ player.play()
 ## Integration with Deepgram
 
 Deepgram WebSocket API requirements:
+
 - **Sample Rate:** 48kHz ✅ (matches TwoVoip output!)
 - **Format:** Linear PCM, 16-bit, little-endian ✅
 - **Channels:** Mono preferred ✅
@@ -207,11 +209,11 @@ func _ready():
         AudioServer.add_bus(bus_idx)
         AudioServer.set_bus_name(bus_idx, "MicrophoneBus")
         AudioServer.set_bus_mute(bus_idx, true)
-    
+
     # Add effect
     opuschunked = AudioEffectOpusChunked.new()
     AudioServer.add_bus_effect(bus_idx, opuschunked, 0)
-    
+
     # Create player
     microphone_player = AudioStreamPlayer.new()
     microphone_player.stream = AudioStreamMicrophone.new()
@@ -223,15 +225,15 @@ func _process(_delta):
     while opuschunked.chunk_available():
         # AI VAD
         var speech_prob = opuschunked.denoise_resampled_chunk()
-        
+
         if speech_prob >= 0.75:
             # Get denoised audio
             var frames = opuschunked.read_chunk(true)
             var pcm = convert_to_pcm(frames)
-            
+
             # Do something with PCM (e.g., stream to Deepgram)
             process_audio(pcm)
-        
+
         opuschunked.drop_chunk()
 ```
 
@@ -241,4 +243,3 @@ func _process(_delta):
 - RnNoise: https://jmvalin.ca/demo/rnnoise/
 - Opus: https://opus-codec.org/
 - Deepgram API: https://developers.deepgram.com/
-

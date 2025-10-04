@@ -1,4 +1,4 @@
-extends Control
+extends Window
 
 ## Test script for VADManager - Tests speech detection without STT integration
 

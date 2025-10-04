@@ -170,9 +170,9 @@ func stop_recording():
 		is_speech_active = false
 		speech_ended.emit()
 	
-	# Flush the opus encoder to reset state
+	# Reset the encoder to clear buffers
 	if opuschunked:
-		opuschunked.flush_opus_encoder()
+		opuschunked.resetencoder(true)  # true = clear buffers
 	
 	print("VADManager: Recording stopped")
 
@@ -319,4 +319,3 @@ func is_currently_recording() -> bool:
 func is_speech_currently_active() -> bool:
 	"""Returns true if speech is currently being detected"""
 	return is_speech_active
-
