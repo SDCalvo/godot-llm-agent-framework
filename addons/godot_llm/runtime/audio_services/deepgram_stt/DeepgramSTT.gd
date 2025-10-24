@@ -5,6 +5,9 @@ extends Node
 ## for real-time speech-to-text transcription. It accepts PCM audio data (typically
 ## from VADManager) and emits signals with transcription results.
 ##
+## Uses Godot 4.x's built-in WebSocketPeer with custom handshake headers to provide
+## the required "Authorization: Token" header for Deepgram authentication.
+##
 ## @tutorial(Deepgram API): https://developers.deepgram.com/docs/getting-started-with-live-streaming-audio
 ## @tutorial(Research Doc): res://addons/godot_llm/runtime/audio_services/deepgram_stt/DEEPGRAM_RESEARCH.md
 
@@ -100,7 +103,7 @@ var utterance_end_ms: int = 0
 ## Current connection state
 var connection_state: ConnectionState = ConnectionState.DISCONNECTED
 
-## WebSocket client
+## WebSocket client (using Godot's built-in WebSocketPeer)
 var websocket: WebSocketPeer = null
 
 ## KeepAlive timer (send every 8 seconds during silence)
@@ -137,7 +140,12 @@ func _ready() -> void:
 ## @param deepgram_api_key: Your Deepgram API key
 ## @param options: Optional dictionary to override default settings
 func initialize(deepgram_api_key: String, options: Dictionary = {}) -> void:
-	api_key = deepgram_api_key
+	# Strip any whitespace/newlines from API key
+	api_key = deepgram_api_key.strip_edges()
+	
+	# Debug: Show API key format (first 4 and last 4 chars)
+	if api_key.length() >= 8:
+		print("DeepgramSTT: API key format: %s...%s (length: %d)" % [api_key.substr(0, 4), api_key.substr(api_key.length() - 4, 4), api_key.length()])
 	
 	# Apply optional configuration
 	if options.has("model"):
@@ -177,7 +185,7 @@ func connect_to_deepgram() -> Error:
 		error.emit("API key not set")
 		return ERR_UNCONFIGURED
 	
-	# Build WebSocket URL with parameters
+	# Build WebSocket URL with parameters (NO API key in URL)
 	var url = "wss://api.deepgram.com/v1/listen"
 	url += "?model=" + model
 	url += "&encoding=" + encoding
@@ -193,15 +201,22 @@ func connect_to_deepgram() -> Error:
 	if utterance_end_ms > 0 and interim_results:
 		url += "&utterance_end_ms=" + str(utterance_end_ms)
 	
-	# Note: WebSocketPeer in Godot 4.x doesn't support custom headers
-	# So we pass the API key as a query parameter instead
-	# Deepgram supports both header and query param authentication
-	url += "&token=" + api_key
+	print("DeepgramSTT: Connecting to URL: ", url)
 	
-	# Create WebSocket and connect
+	# Create WebSocket with custom Authorization header
 	websocket = WebSocketPeer.new()
-	var tls_options = TLSOptions.client()
-	var err = websocket.connect_to_url(url, tls_options)
+	
+	# Set larger buffer sizes to handle streaming audio (16MB each)
+	websocket.inbound_buffer_size = 16 * 1024 * 1024
+	websocket.outbound_buffer_size = 16 * 1024 * 1024
+	
+	# Set authorization header (must be set BEFORE connect_to_url)
+	websocket.handshake_headers = PackedStringArray([
+		"Authorization: Token " + api_key
+	])
+	
+	# Connect to Deepgram
+	var err = websocket.connect_to_url(url, TLSOptions.client())
 	
 	if err != OK:
 		push_error("DeepgramSTT: Failed to connect: " + error_string(err))
@@ -212,7 +227,7 @@ func connect_to_deepgram() -> Error:
 	connection_state = ConnectionState.CONNECTING
 	set_process(true)
 	
-	print("DeepgramSTT: Connecting to Deepgram...")
+	print("DeepgramSTT: Connecting to Deepgram with Authorization header...")
 	return OK
 
 ## Disconnect from Deepgram gracefully
@@ -260,7 +275,7 @@ func send_audio(pcm_data: PackedByteArray) -> void:
 		return
 	
 	# Send as binary WebSocket frame
-	var err = websocket.send(pcm_data)
+	var err = websocket.send(pcm_data, WebSocketPeer.WRITE_MODE_BINARY)
 	if err != OK:
 		push_error("DeepgramSTT: Failed to send audio: " + error_string(err))
 		error.emit("Failed to send audio: " + error_string(err))
@@ -339,69 +354,60 @@ func _process(delta: float) -> void:
 	if not websocket:
 		return
 	
-	# Poll WebSocket
+	# Poll WebSocket to process incoming/outgoing data
 	websocket.poll()
+	
+	# Check WebSocket state
 	var state = websocket.get_ready_state()
 	
-	# Handle connection state changes
-	match state:
-		WebSocketPeer.STATE_OPEN:
-			if connection_state == ConnectionState.CONNECTING:
-				_on_connection_established()
-			elif connection_state == ConnectionState.CONNECTED:
-				_process_connected(delta)
-		
-		WebSocketPeer.STATE_CLOSING:
-			pass  # Connection is closing, wait for STATE_CLOSED
-		
-		WebSocketPeer.STATE_CLOSED:
-			_on_connection_closed()
-
-## Called when WebSocket connection is established
-func _on_connection_established() -> void:
-	connection_state = ConnectionState.CONNECTED
-	reconnect_attempts = 0
-	reconnect_timer = 0.0
-	
-	print("DeepgramSTT: Connected successfully!")
-	connected.emit()
-	
-	# Flush any buffered audio
-	_flush_audio_buffer()
-
-## Called when WebSocket connection is closed
-func _on_connection_closed() -> void:
-	var close_code = websocket.get_close_code()
-	var close_reason = websocket.get_close_reason()
-	
-	print("DeepgramSTT: Connection closed (code: %d, reason: %s)" % [close_code, close_reason])
-	
-	# Handle specific error codes
-	match close_code:
-		1008:  # DATA-0000: Invalid audio data
-			push_error("DeepgramSTT: Invalid audio data. Check encoding parameters.")
-			error.emit("Invalid audio data (1008)")
-		1011:  # NET-0000 or NET-0001: Timeout
-			push_warning("DeepgramSTT: Connection timeout. Reconnecting...")
+	# Handle state transitions
+	if connection_state == ConnectionState.CONNECTING:
+		if state == WebSocketPeer.STATE_OPEN:
+			# Connection successful!
+			connection_state = ConnectionState.CONNECTED
+			reconnect_attempts = 0
+			reconnect_timer = 0.0
+			print("DeepgramSTT: ✅ WebSocket connected successfully!")
+			print("DeepgramSTT: Connected to: ", websocket.get_connected_host(), ":", websocket.get_connected_port())
+			print("DeepgramSTT: Selected protocol: ", websocket.get_selected_protocol())
+			connected.emit()
+			
+			# Flush any buffered audio
+			_flush_audio_buffer()
+		elif state == WebSocketPeer.STATE_CLOSED:
+			# Connection failed
+			var close_code = websocket.get_close_code()
+			var close_reason = websocket.get_close_reason()
+			push_error("DeepgramSTT: ❌ Connection failed - Code: %d, Reason: %s" % [close_code, close_reason])
+			error.emit("Connection failed: " + close_reason)
 			_attempt_reconnect()
-			return
-		_:
-			if close_code != 1000:  # 1000 = normal closure
-				push_warning("DeepgramSTT: Unexpected closure: %s" % close_reason)
+		elif state == WebSocketPeer.STATE_CONNECTING:
+			# Still connecting, this is normal - just wait
+			pass
 	
-	_cleanup_connection()
+	elif connection_state == ConnectionState.CONNECTED:
+		if state == WebSocketPeer.STATE_OPEN:
+			# Process incoming messages
+			while websocket.get_available_packet_count() > 0:
+				var packet = websocket.get_packet()
+				var is_string = websocket.was_string_packet()
+				
+				if is_string:
+					var message = packet.get_string_from_utf8()
+					_handle_json_message(message)
+			
+			# Handle KeepAlive timer
+			_process_connected(delta)
+		elif state == WebSocketPeer.STATE_CLOSED:
+			# Unexpected disconnection
+			var close_code = websocket.get_close_code()
+			var close_reason = websocket.get_close_reason()
+			print("DeepgramSTT: Connection closed - Code: %d, Reason: %s" % [close_code, close_reason])
+			_attempt_reconnect()
 
-## Process connected state (check for messages and KeepAlive)
+
+## Process connected state (KeepAlive timer)
 func _process_connected(delta: float) -> void:
-	# Process incoming messages
-	while websocket.get_available_packet_count() > 0:
-		var packet = websocket.get_packet()
-		var is_string = websocket.was_string_packet()
-		
-		if is_string:
-			var json_string = packet.get_string_from_utf8()
-			_parse_message(json_string)
-	
 	# Handle KeepAlive timer
 	var current_time = Time.get_ticks_msec() / 1000.0
 	var time_since_last_audio = current_time - last_audio_send_time
@@ -413,7 +419,9 @@ func _process_connected(delta: float) -> void:
 			send_keepalive()
 
 ## Parse JSON message from Deepgram
-func _parse_message(json_string: String) -> void:
+func _handle_json_message(json_string: String) -> void:
+	print("DeepgramSTT: 📨 Received message: ", json_string.substr(0, min(200, json_string.length())))
+	
 	var json = JSON.new()
 	var parse_error = json.parse(json_string)
 	
@@ -495,7 +503,9 @@ func _handle_speech_started(data: Dictionary) -> void:
 ## Handle Metadata message
 func _handle_metadata(data: Dictionary) -> void:
 	var request_id = data.get("request_id", "")
-	print("DeepgramSTT: Metadata received (request_id: %s)" % request_id)
+	var duration = data.get("duration", 0.0)
+	var channels = data.get("channels", 0)
+	print("DeepgramSTT: 📋 Metadata received - request_id: %s, duration: %.2fs, channels: %d" % [request_id, duration, channels])
 
 #endregion
 

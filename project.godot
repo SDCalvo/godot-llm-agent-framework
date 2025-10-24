@@ -26,6 +26,7 @@ LLMToolRegistry="*res://addons/godot_llm/runtime/llm_tool_registry/LLMToolRegist
 LLMEmailManager="*res://addons/godot_llm/runtime/llm_email_manager/LLMEmailManager.gd"
 AudioManager="*res://addons/godot_llm/runtime/audio_services/audio_manager/AudioManager.gd"
 ElevenLabsWrapper="*res://addons/godot_llm/runtime/audio_services/elevenlabs_wrapper/ElevenLabsWrapper.gd"
+DeepgramSTT="*res://addons/godot_llm/runtime/audio_services/deepgram_stt/DeepgramSTT.gd"
 
 [display]
 

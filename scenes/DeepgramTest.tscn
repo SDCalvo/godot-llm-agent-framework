@@ -4,9 +4,9 @@
 
 [node name="DeepgramTest" type="Window"]
 oversampling_override = 1.0
-title = "Deepgram STT Test Suite"
+title = "VAD → Deepgram STT Test"
 initial_position = 1
-size = Vector2i(900, 700)
+size = Vector2i(800, 650)
 always_on_top = true
 script = ExtResource("1_deepgram_test")
 
@@ -18,21 +18,6 @@ grow_horizontal = 2
 grow_vertical = 2
 
 [node name="VBox" type="VBoxContainer" parent="Panel"]
-layout_mode = 2
-
-[node name="ModePanel" type="PanelContainer" parent="Panel/VBox"]
-layout_mode = 2
-
-[node name="ModeLabel" type="Label" parent="Panel/VBox/ModePanel"]
-layout_mode = 2
-text = "Mode: Deepgram Only"
-horizontal_alignment = 1
-
-[node name="ModeToggleBtn" type="Button" parent="Panel/VBox/ModePanel"]
-layout_mode = 2
-text = "Switch to Full Pipeline"
-
-[node name="HSeparator1" type="HSeparator" parent="Panel/VBox"]
 layout_mode = 2
 
 [node name="StatusPanel" type="PanelContainer" parent="Panel/VBox"]
@@ -49,17 +34,45 @@ alignment = 1
 
 [node name="ConnectBtn" type="Button" parent="Panel/VBox/ControlPanel"]
 layout_mode = 2
-text = "Connect"
+text = "Connect to Deepgram"
 
 [node name="DisconnectBtn" type="Button" parent="Panel/VBox/ControlPanel"]
 layout_mode = 2
 disabled = true
 text = "Disconnect"
 
-[node name="TestAudioBtn" type="Button" parent="Panel/VBox/ControlPanel"]
+[node name="HSeparator1" type="HSeparator" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="VADPanel" type="PanelContainer" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="VBox" type="VBoxContainer" parent="Panel/VBox/VADPanel"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="Panel/VBox/VADPanel/VBox"]
+layout_mode = 2
+text = "Voice Activity Detection (Microphone)"
+horizontal_alignment = 1
+
+[node name="VADStatusLabel" type="Label" parent="Panel/VBox/VADPanel/VBox"]
+layout_mode = 2
+text = "VAD: Initializing..."
+horizontal_alignment = 1
+
+[node name="VADControlPanel" type="HBoxContainer" parent="Panel/VBox/VADPanel/VBox"]
+layout_mode = 2
+alignment = 1
+
+[node name="VADStartBtn" type="Button" parent="Panel/VBox/VADPanel/VBox/VADControlPanel"]
 layout_mode = 2
 disabled = true
-text = "Send Test Audio"
+text = "Start Listening"
+
+[node name="VADStopBtn" type="Button" parent="Panel/VBox/VADPanel/VBox/VADControlPanel"]
+layout_mode = 2
+disabled = true
+text = "Stop Listening"
 
 [node name="HSeparator2" type="HSeparator" parent="Panel/VBox"]
 layout_mode = 2
@@ -84,54 +97,6 @@ layout_mode = 2
 text = "Confidence: 0.0%"
 
 [node name="HSeparator3" type="HSeparator" parent="Panel/VBox"]
-layout_mode = 2
-
-[node name="VADPanel" type="PanelContainer" parent="Panel/VBox"]
-visible = false
-layout_mode = 2
-
-[node name="VBox" type="VBoxContainer" parent="Panel/VBox/VADPanel"]
-layout_mode = 2
-
-[node name="Label" type="Label" parent="Panel/VBox/VADPanel/VBox"]
-layout_mode = 2
-text = "Voice Activity Detection:"
-horizontal_alignment = 1
-
-[node name="VADStatusLabel" type="Label" parent="Panel/VBox/VADPanel/VBox"]
-layout_mode = 2
-text = "VAD: Not Setup"
-horizontal_alignment = 1
-
-[node name="VADControlPanel" type="HBoxContainer" parent="Panel/VBox/VADPanel/VBox"]
-layout_mode = 2
-alignment = 1
-
-[node name="VADStartBtn" type="Button" parent="Panel/VBox/VADPanel/VBox/VADControlPanel"]
-layout_mode = 2
-disabled = true
-text = "Start VAD"
-
-[node name="VADStopBtn" type="Button" parent="Panel/VBox/VADPanel/VBox/VADControlPanel"]
-layout_mode = 2
-disabled = true
-text = "Stop VAD"
-
-[node name="HSeparator" type="HSeparator" parent="Panel/VBox/VADPanel/VBox"]
-layout_mode = 2
-
-[node name="Label2" type="Label" parent="Panel/VBox/VADPanel/VBox"]
-layout_mode = 2
-text = "Agent Response:"
-horizontal_alignment = 1
-
-[node name="AgentResponseLabel" type="Label" parent="Panel/VBox/VADPanel/VBox"]
-layout_mode = 2
-text = "Agent: (waiting for input...)"
-horizontal_alignment = 1
-autowrap_mode = 3
-
-[node name="HSeparator4" type="HSeparator" parent="Panel/VBox"]
 layout_mode = 2
 
 [node name="FinalLogPanel" type="VBoxContainer" parent="Panel/VBox"]
