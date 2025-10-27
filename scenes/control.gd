@@ -8,6 +8,7 @@ const EmailSystemTest = preload("res://scenes/EmailSystemTest.gd")
 const AsyncEmailTest = preload("res://scenes/AsyncEmailTest.gd")
 const VADTest = preload("res://scenes/VADTest.tscn")
 const DeepgramTest = preload("res://scenes/DeepgramTest.tscn")
+const E2ETest = preload("res://scenes/E2ETest.tscn")
 
 # Core components
 var wrapper: OpenAIWrapper
@@ -17,6 +18,7 @@ var email_test: EmailSystemTest
 var async_email_test: AsyncEmailTest
 var vad_test: Window
 var deepgram_test: Window
+var e2e_test: Window
 
 # UI references
 var console_output: RichTextLabel
@@ -37,6 +39,7 @@ var async_email_test_btn: Button
 var tts_test_btn: Button
 var vad_test_btn: Button
 var deepgram_test_btn: Button
+var e2e_test_btn: Button
 
 # Test scripts
 var tts_test: Node
@@ -92,6 +95,7 @@ func _setup_ui_references() -> void:
 	tts_test_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/TTSTestBtn"
 	vad_test_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/VADTestBtn"
 	deepgram_test_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/DeepgramTestBtn"
+	e2e_test_btn = $"UIContainer/TestButtonsPanel/ButtonGrid/E2ETestBtn"
 	
 	# Connect console controls
 	clear_btn.pressed.connect(func(): console_output.text = "")
@@ -277,6 +281,7 @@ func _connect_test_buttons() -> void:
 	tts_test_btn.pressed.connect(_test_tts_system)
 	vad_test_btn.pressed.connect(_test_vad_system)
 	deepgram_test_btn.pressed.connect(_test_deepgram_system)
+	e2e_test_btn.pressed.connect(_test_e2e_system)
 
 # =============================================================================
 # TEST FUNCTIONS
@@ -581,7 +586,7 @@ func _test_vad_system() -> void:
 	
 	# Make sure window is visible and on top
 	vad_test.show()
-	vad_test.move_to_foreground()
+	vad_test.grab_focus()
 
 func _test_deepgram_system() -> void:
 	log_test("🎤 Opening Deepgram STT Test Window...")
@@ -604,4 +609,27 @@ func _test_deepgram_system() -> void:
 	
 	# Make sure window is visible and on top
 	deepgram_test.show()
-	deepgram_test.move_to_foreground()
+	deepgram_test.grab_focus()
+
+func _test_e2e_system() -> void:
+	log_test("🎤 Opening E2E Voice Pipeline Test...")
+	
+	# Create E2E test if not already created
+	if e2e_test == null:
+		e2e_test = E2ETest.instantiate()
+		get_tree().root.add_child(e2e_test)
+		
+		# Connect close signal to cleanup
+		e2e_test.close_requested.connect(func():
+			e2e_test.queue_free()
+			e2e_test = null
+		)
+		
+		log_success("✅ E2E Test window opened!")
+	else:
+		log_info("ℹ️ E2E Test window already open - bringing to front")
+		e2e_test.grab_focus()
+	
+	# Make sure window is visible and on top
+	e2e_test.show()
+	e2e_test.grab_focus()

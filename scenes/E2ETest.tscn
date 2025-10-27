@@ -1,0 +1,180 @@
+[gd_scene load_steps=2 format=3 uid="uid://bafup363gfe1b"]
+
+[ext_resource type="Script" path="res://scenes/E2ETest.gd" id="1_e2e_test"]
+
+[node name="E2ETest" type="Window"]
+title = "E2E Voice Pipeline Test"
+initial_position = 1
+size = Vector2i(1200, 700)
+always_on_top = true
+script = ExtResource("1_e2e_test")
+
+[node name="HBox" type="HBoxContainer" parent="."]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="DebugPanel" type="PanelContainer" parent="HBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(400, 0)
+
+[node name="VBox" type="VBoxContainer" parent="HBox/DebugPanel"]
+layout_mode = 2
+
+[node name="TitleLabel" type="Label" parent="HBox/DebugPanel/VBox"]
+layout_mode = 2
+text = "E2E Voice Pipeline Test"
+horizontal_alignment = 1
+
+[node name="HSeparator0" type="HSeparator" parent="HBox/DebugPanel/VBox"]
+layout_mode = 2
+
+[node name="PipelineStatus" type="HBoxContainer" parent="HBox/DebugPanel/VBox"]
+layout_mode = 2
+alignment = 1
+
+[node name="VADLabel" type="Label" parent="HBox/DebugPanel/VBox/PipelineStatus"]
+layout_mode = 2
+text = "VAD"
+
+[node name="Arrow1" type="Label" parent="HBox/DebugPanel/VBox/PipelineStatus"]
+layout_mode = 2
+text = "→"
+
+[node name="STTLabel" type="Label" parent="HBox/DebugPanel/VBox/PipelineStatus"]
+layout_mode = 2
+text = "STT"
+
+[node name="Arrow2" type="Label" parent="HBox/DebugPanel/VBox/PipelineStatus"]
+layout_mode = 2
+text = "→"
+
+[node name="LLMLabel" type="Label" parent="HBox/DebugPanel/VBox/PipelineStatus"]
+layout_mode = 2
+text = "LLM"
+
+[node name="Arrow3" type="Label" parent="HBox/DebugPanel/VBox/PipelineStatus"]
+layout_mode = 2
+text = "→"
+
+[node name="ToolLabel" type="Label" parent="HBox/DebugPanel/VBox/PipelineStatus"]
+layout_mode = 2
+text = "Tools"
+
+[node name="Arrow4" type="Label" parent="HBox/DebugPanel/VBox/PipelineStatus"]
+layout_mode = 2
+text = "→"
+
+[node name="TTSLabel" type="Label" parent="HBox/DebugPanel/VBox/PipelineStatus"]
+layout_mode = 2
+text = "TTS"
+
+[node name="HSeparator1" type="HSeparator" parent="HBox/DebugPanel/VBox"]
+layout_mode = 2
+
+[node name="TranscriptPanel" type="VBoxContainer" parent="HBox/DebugPanel/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="Label" type="Label" parent="HBox/DebugPanel/VBox/TranscriptPanel"]
+layout_mode = 2
+text = "STT Transcript:"
+
+[node name="TranscriptLog" type="RichTextLabel" parent="HBox/DebugPanel/VBox/TranscriptPanel"]
+layout_mode = 2
+size_flags_vertical = 3
+bbcode_enabled = true
+scroll_following = true
+
+[node name="HSeparator2" type="HSeparator" parent="HBox/DebugPanel/VBox"]
+layout_mode = 2
+
+[node name="LLMPanel" type="VBoxContainer" parent="HBox/DebugPanel/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="Label" type="Label" parent="HBox/DebugPanel/VBox/LLMPanel"]
+layout_mode = 2
+text = "LLM Output:"
+
+[node name="LLMLog" type="RichTextLabel" parent="HBox/DebugPanel/VBox/LLMPanel"]
+layout_mode = 2
+size_flags_vertical = 3
+bbcode_enabled = true
+scroll_following = true
+
+[node name="HSeparator3" type="HSeparator" parent="HBox/DebugPanel/VBox"]
+layout_mode = 2
+
+[node name="ToolsPanel" type="VBoxContainer" parent="HBox/DebugPanel/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="Label" type="Label" parent="HBox/DebugPanel/VBox/ToolsPanel"]
+layout_mode = 2
+text = "Tool Calls & Results:"
+
+[node name="ToolsLog" type="RichTextLabel" parent="HBox/DebugPanel/VBox/ToolsPanel"]
+layout_mode = 2
+size_flags_vertical = 3
+bbcode_enabled = true
+scroll_following = true
+
+[node name="HSeparator4" type="HSeparator" parent="HBox/DebugPanel/VBox"]
+layout_mode = 2
+
+[node name="ButtonsPanel" type="HBoxContainer" parent="HBox/DebugPanel/VBox"]
+layout_mode = 2
+alignment = 1
+
+[node name="ClearShapesBtn" type="Button" parent="HBox/DebugPanel/VBox/ButtonsPanel"]
+layout_mode = 2
+text = "Clear Shapes"
+
+[node name="ClearLogBtn" type="Button" parent="HBox/DebugPanel/VBox/ButtonsPanel"]
+layout_mode = 2
+text = "Clear Log"
+
+[node name="GameWorld" type="PanelContainer" parent="HBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_stretch_ratio = 1.5
+
+[node name="SubViewportContainer" type="SubViewportContainer" parent="HBox/GameWorld"]
+layout_mode = 2
+stretch = true
+
+[node name="SubViewport" type="SubViewport" parent="HBox/GameWorld/SubViewportContainer"]
+size = Vector2i(720, 700)
+render_target_update_mode = 4
+
+[node name="World" type="Node2D" parent="HBox/GameWorld/SubViewportContainer/SubViewport"]
+
+[node name="ShapesContainer" type="Node2D" parent="HBox/GameWorld/SubViewportContainer/SubViewport/World"]
+
+[node name="Robot" type="Label" parent="HBox/GameWorld/SubViewportContainer/SubViewport/World"]
+offset_left = 310.0
+offset_top = 50.0
+offset_right = 410.0
+offset_bottom = 100.0
+text = "🤖"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="SpeechBubble" type="PanelContainer" parent="HBox/GameWorld/SubViewportContainer/SubViewport/World"]
+visible = false
+offset_left = 150.0
+offset_top = 120.0
+offset_right = 570.0
+offset_bottom = 220.0
+
+[node name="BubbleText" type="Label" parent="HBox/GameWorld/SubViewportContainer/SubViewport/World/SpeechBubble"]
+layout_mode = 2
+text = "NPC Response"
+horizontal_alignment = 1
+vertical_alignment = 1
+autowrap_mode = 3
+

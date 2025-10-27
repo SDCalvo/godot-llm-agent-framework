@@ -31,7 +31,7 @@ const MICROPHONE_BUS_NAME = "VAD_Microphone"
 
 ## VAD configuration (exported for tuning)
 @export_range(0.0, 1.0, 0.01) var vad_threshold: float = 0.75  ## Speech probability threshold (75% default)
-@export var grace_period_ms: int = 200  ## Milliseconds to wait before ending speech
+@export var grace_period_ms: int = 300  ## Milliseconds to wait before ending speech (matches Deepgram endpointing)
 @export var retroactive_grace_ms: int = 100  ## Milliseconds to capture before speech starts (adds latency!)
 @export var enable_denoising: bool = true  ## Apply RnNoise denoising to output audio
 

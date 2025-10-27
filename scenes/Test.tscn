@@ -93,7 +93,6 @@ func zoom_camera(zoom_delta):
 "
 
 [node name="Test" type="Node2D"]
-position = Vector2(0, -1)
 
 [node name="Camera2D" type="Camera2D" parent="."]
 script = SubResource("GDScript_1")
@@ -190,6 +189,10 @@ text = "VAD Test"
 [node name="DeepgramTestBtn" type="Button" parent="TestUI/UIContainer/TestButtonsPanel/ButtonGrid"]
 layout_mode = 2
 text = "Deepgram STT Test"
+
+[node name="E2ETestBtn" type="Button" parent="TestUI/UIContainer/TestButtonsPanel/ButtonGrid"]
+layout_mode = 2
+text = "E2E Voice Test"
 
 [node name="OutputConsole" type="Panel" parent="TestUI/UIContainer"]
 layout_mode = 1
